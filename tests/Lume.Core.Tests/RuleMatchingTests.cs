@@ -66,6 +66,13 @@ internal static class RuleMatchingTests
             void Create(string name, string target)
             {
                 if (!OperatingSystem.IsWindows()) return;
+                // Write the InternetShortcut fixture directly: WScript's URL setter
+                // depends on installed protocol handlers on some Windows editions.
+                if (name.EndsWith(".url", StringComparison.OrdinalIgnoreCase))
+                {
+                    File.WriteAllText(Path.Combine(fixtures, name), "[InternetShortcut]\r\nURL=" + target + "\r\n");
+                    return;
+                }
                 object? link = null;
                 try { link = ((dynamic)shell!).CreateShortcut(Path.Combine(fixtures, name)); ((dynamic)link).TargetPath = target; ((dynamic)link).Save(); }
                 finally { if (link != null) Marshal.FinalReleaseComObject(link); }
