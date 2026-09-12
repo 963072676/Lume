@@ -61,7 +61,9 @@ internal static class RuleMatchingTests
         {
             if (!OperatingSystem.IsWindows()) return;
             var fixtures = Path.Combine(root, "shortcut-rules"); Directory.CreateDirectory(fixtures);
-            var game = Path.Combine(root, "Games", "音乐.txt"); Directory.CreateDirectory(Path.GetDirectoryName(game)!); File.WriteAllText(game, "内容");
+            // WScript validates TargetPath using the system code page on some hosts.
+            // Keep the target portable; the shortcut names still exercise Chinese paths.
+            var game = Path.Combine(root, "Games", "music.txt"); Directory.CreateDirectory(Path.GetDirectoryName(game)!); File.WriteAllText(game, "内容");
             object? shell = null;
             void Create(string name, string target)
             {
