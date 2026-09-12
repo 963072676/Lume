@@ -74,7 +74,16 @@ internal static class RuleMatchingTests
                     return;
                 }
                 object? link = null;
-                try { link = ((dynamic)shell!).CreateShortcut(Path.Combine(fixtures, name)); ((dynamic)link).TargetPath = target; ((dynamic)link).Save(); }
+                var stage = "CreateShortcut";
+                try
+                {
+                    link = ((dynamic)shell!).CreateShortcut(Path.Combine(fixtures, name));
+                    stage = "TargetPath";
+                    ((dynamic)link).TargetPath = target;
+                    stage = "Save";
+                    ((dynamic)link).Save();
+                }
+                catch (Exception ex) { throw new InvalidOperationException($"Shortcut fixture {name}: {stage} failed", ex); }
                 finally { if (link != null) Marshal.FinalReleaseComObject(link); }
             }
             try
