@@ -1,0 +1,4 @@
+LIBRARY Lume.Shell.dll
+EXPORTS
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE

@@ -1,0 +1,45 @@
+name: 构建检查
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: 核心回归
+        run: dotnet run --project tests/Lume.Core.Tests -c Release
+      - name: 构建完整便携版
+        run: ./scripts/build.ps1
+      - name: 构建精简版
+        run: ./scripts/build.ps1 -FrameworkDependent
+      - name: 打包
+        run: |
+          ./scripts/package.ps1
+          ./scripts/package.ps1 -FrameworkDependent
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Lume-win-x64
+          path: |
+            artifacts/*.zip
+            artifacts/*.sha256
+          if-no-files-found: error

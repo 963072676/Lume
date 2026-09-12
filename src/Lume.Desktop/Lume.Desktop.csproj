@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <!-- 主循环属于 WPF；WinForms 仅提供托盘，不使用它的 DPI 启动代码。 -->
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
+    <AssemblyName>Lume</AssemblyName>
+    <ApplicationIcon>Assets/lume.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(EnableVerification)' == 'true'">
+    <DefineConstants>$(DefineConstants);VERIFICATION</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(EnableVerification)' == 'true'">
+    <Compile Include="../../tests/Lume.Desktop.Verification/*.cs" Link="Verification/%(Filename)%(Extension)" />
+  </ItemGroup>
+  <ItemGroup><ProjectReference Include="../Lume.Core/Lume.Core.csproj" /></ItemGroup>
+  <ItemGroup><Resource Include="Assets/lume.png" /><Resource Include="Assets/lume.ico" /></ItemGroup>
+</Project>

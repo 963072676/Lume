@@ -1,0 +1,44 @@
+# Build outputs and local tools
+**/bin/
+**/obj/
+/artifacts/
+/.tools/
+/versions/
+
+# Local editor and assistant state
+.vs/
+.idea/
+.vscode/
+.workbuddy/
+.codex/
+*.user
+*.suo
+*.sln.docstates
+
+# Runtime data, diagnostics and temporary files
+**/demo-data/
+**/TestResults/
+**/coverage/
+*.log
+*.dmp
+*.bak
+*.tmp
+*.temp
+*.cache
+*.local.json
+*.local.ps1
+
+# Secrets and signing material
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.pem
+*.key
+*.snk
+
+# Operating system metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
