@@ -29,7 +29,7 @@ internal static class RuleMatchingTests
         });
         test("快捷目标与快捷方式自身字段独立且缺失大小不误命中", () =>
         {
-            var f = Item("启动.lnk") with { Target = new(@"D:\Games\Studio\Player.exe", "Player.exe", ".exe", "file", 3 * 1048576, "播放器", "Studio", "Example") };
+            var f = Item("launch.lnk") with { Target = new(@"D:\Games\Studio\Player.exe", "Player.exe", ".exe", "file", 3 * 1048576, "播放器", "Studio", "Example") };
             Check(Match(f, "targetPath", "contains", "game")); Check(!Match(f, "path", "contains", "game"));
             Check(Match(f, "targetName", "contains", "player")); Check(Match(f, "targetExtension", "in", "EXE,dll"));
             Check(Match(f, "targetSizeMb", "gt", "2")); Check(Match(f, "targetDescription", "contains", "播放"));
@@ -62,7 +62,7 @@ internal static class RuleMatchingTests
             if (!OperatingSystem.IsWindows()) return;
             var fixtures = Path.Combine(root, "shortcut-rules"); Directory.CreateDirectory(fixtures);
             // WScript validates TargetPath using the system code page on some hosts.
-            // Keep the target portable; the shortcut names still exercise Chinese paths.
+            // Keep real COM fixture paths portable across the runner and local system locales.
             var game = Path.Combine(root, "Games", "music.txt"); Directory.CreateDirectory(Path.GetDirectoryName(game)!); File.WriteAllText(game, "内容");
             object? shell = null;
             void Create(string name, string target)
@@ -91,20 +91,20 @@ internal static class RuleMatchingTests
             try
             {
                 shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell")!);
-                Create("启动.lnk", game); Create("目录.lnk", Path.GetDirectoryName(game)!);
-                Create("丢失.lnk", Path.Combine(root, "Games", "missing.exe")); Create("游戏.url", "steam://rungameid/1234");
-                Create("程序.lnk", Environment.ProcessPath!);
+                Create("launch.lnk", game); Create("folder.lnk", Path.GetDirectoryName(game)!);
+                Create("missing.lnk", Path.Combine(root, "Games", "missing.exe")); Create("game.url", "steam://rungameid/1234");
+                Create("program.lnk", Environment.ProcessPath!);
             }
             finally { if (shell != null) Marshal.FinalReleaseComObject(shell); }
             var before = Directory.GetFiles(fixtures).ToDictionary(p => p, File.ReadAllBytes);
             var files = DesktopScanner.Scan([fixtures]).Files;
-            var linkFile = files.Single(f => f.Name == "启动.lnk");
+            var linkFile = files.Single(f => f.Name == "launch.lnk");
             Check(linkFile.Target?.Path == game && Match(linkFile, "targetPath", "contains", "Game"));
             Check(Match(linkFile, "targetExtension", "in", "txt") && linkFile.Target?.Size == new FileInfo(game).Length);
-            Check(files.Single(f => f.Name == "目录.lnk").Target?.Kind == "folder");
-            Check(files.Single(f => f.Name == "丢失.lnk").Target is { Kind: "unknown", Size: null });
-            Check(files.Single(f => f.Name == "游戏.url").Target is { Kind: "url", Path: "steam://rungameid/1234" });
-            Check(files.Single(f => f.Name == "程序.lnk").Target is { Kind: "file", Product.Length: > 0 });
+            Check(files.Single(f => f.Name == "folder.lnk").Target?.Kind == "folder");
+            Check(files.Single(f => f.Name == "missing.lnk").Target is { Kind: "unknown", Size: null });
+            Check(files.Single(f => f.Name == "game.url").Target is { Kind: "url", Path: "steam://rungameid/1234" });
+            Check(files.Single(f => f.Name == "program.lnk").Target is { Kind: "file", Product.Length: > 0 });
             Check(before.All(p => p.Value.SequenceEqual(File.ReadAllBytes(p.Key))));
         });
     }
