@@ -91,14 +91,18 @@ internal static class IconVerification
     }
     private static void Shortcut(string path, string icon)
     {
+        // WScript.Save uses the system code page on some Windows images. Keep
+        // fixture creation portable, then exercise the real Unicode path below.
+        var temporary = Path.Combine(Path.GetDirectoryName(path)!, Guid.NewGuid().ToString("N") + ".lnk");
         dynamic shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell")!)!;
         try
         {
-            dynamic shortcut = shell.CreateShortcut(path);
+            dynamic shortcut = shell.CreateShortcut(temporary);
             try { shortcut.TargetPath = Environment.ProcessPath!; shortcut.IconLocation = icon + ",0"; shortcut.Save(); }
             finally { Marshal.FinalReleaseComObject(shortcut); }
+            File.Move(temporary, path, true);
         }
-        finally { Marshal.FinalReleaseComObject(shell); }
+        finally { Marshal.FinalReleaseComObject(shell); if (File.Exists(temporary)) File.Delete(temporary); }
     }
     [DllImport("user32.dll")] private static extern bool DestroyIcon(IntPtr icon);
     private static void SaveIcon(string path, Drawing.Color color)
