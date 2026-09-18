@@ -25,6 +25,6 @@ public static class LayoutBackup
         known.Add("__windows-system");
         foreach (var pair in snapshot.Positions.Where(p => known.Contains(p.Key))) result.Positions[pair.Key] = pair.Value;
         foreach (var pair in snapshot.Cards.Where(p => known.Contains(p.Key))) result.Cards[pair.Key] = pair.Value;
-        result.GlassOpacity = (byte)Math.Clamp((int)snapshot.GlassOpacity, 150, 235); result.SnapEnabled = snapshot.SnapEnabled; result.ShowSystemEntries = snapshot.ShowSystemEntries; return result;
+        result.GlassOpacity = (byte)Math.Clamp((int)snapshot.GlassOpacity, 15, 240); result.SnapEnabled = snapshot.SnapEnabled; result.ShowSystemEntries = snapshot.ShowSystemEntries; return result;
     }
 }

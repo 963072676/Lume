@@ -16,6 +16,7 @@ public sealed record AssignmentChange(string Path, string? Before, string After)
 public sealed record CardPlacement(int X, int Y, int Width = 330, int Height = 340);
 public sealed class DesktopPreferences
 {
+    public string Theme { get; set; } = ThemeIds.Default;
     public bool ShowSystemEntries { get; set; } = true;
     public Dictionary<string, CardOptions> Cards { get; set; } = [];
     public bool SnapEnabled { get; set; } = true;
@@ -53,6 +54,9 @@ public sealed class AppState
     public Configuration Configuration { get; set; } = new();
     public Dictionary<string, string> Assignments { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public List<HistoryEntry> History { get; set; } = [];
+    public string? HistoryFile { get; set; }
+    public List<HistoryChunk> HistoryArchives { get; set; } = [];
+    public string? StorageRevision { get; set; }
     public DesktopPreferences Desktop { get; set; } = new();
 
     public static AppState Create(IEnumerable<string> roots) => new()

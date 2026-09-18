@@ -5,6 +5,10 @@
 /.tools/
 /versions/
 
+# Local audit notes contain machine-specific paths and transient process evidence.
+/docs/优化落地与验收-2026-09-16.md
+/docs/项目缺口与性能评估-2026-09-16.md
+
 # Local editor and assistant state
 .vs/
 .idea/

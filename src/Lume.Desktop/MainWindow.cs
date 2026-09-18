@@ -18,6 +18,7 @@ public sealed partial class MainWindow : Window
 {
     private readonly Organizer organizer;
     private readonly StateStore store;
+    private readonly RuntimeDiagnostics? diagnostics;
     private readonly bool demo;
     private readonly bool smoke;
     private readonly ContentControl content = new();
@@ -33,6 +34,12 @@ public sealed partial class MainWindow : Window
     private readonly List<FileSystemWatcher> watchers = [];
     private readonly DispatcherTimer debounce = new() { Interval = TimeSpan.FromMilliseconds(500) };
     private readonly DispatcherTimer periodic = new() { Interval = TimeSpan.FromSeconds(30) };
+    private readonly DesktopScanSession scanner = new();
+    private readonly HashSet<string> dirtyRoots = new(StringComparer.OrdinalIgnoreCase);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> pendingRoots = new(StringComparer.OrdinalIgnoreCase);
+    private int pendingRefresh;
+    private DateTime lastFullScanUtc = DateTime.MinValue;
+    private bool fullScanRequested = true;
     private readonly List<string> watcherWarnings = [];
     private readonly Dictionary<string, Button> navigation = [];
     private readonly TileSelection boardSelection = new();
@@ -56,11 +63,12 @@ public sealed partial class MainWindow : Window
     public bool Resident { get; set; }
     public bool Exiting { get; set; }
     public Func<string, Task>? GlobalCommand { get; set; }
+    internal Func<bool>? IsDesktopPaused { get; set; }
     private bool monitoringStarted;
 
-    public MainWindow(Organizer organizer, StateStore store, bool demo, bool smoke)
+    public MainWindow(Organizer organizer, StateStore store, bool demo, bool smoke, RuntimeDiagnostics? diagnostics = null)
     {
-        this.organizer = organizer; this.store = store; this.demo = demo; this.smoke = smoke;
+        this.organizer = organizer; this.store = store; this.demo = demo; this.smoke = smoke; this.diagnostics = diagnostics;
         Style = (Style)Application.Current.FindResource(typeof(Window));
         Title = "Lume · 桌面整理" + (demo ? " — 隔离演示" : "");
         Width = 1000; Height = 720; MinWidth = 840; MinHeight = 580;
@@ -84,8 +92,8 @@ public sealed partial class MainWindow : Window
         status.ToolTip = "关闭窗口后继续在托盘运行";
         main.Children.Add(bottom); main.Children.Add(content); Content = layout;
 
-        debounce.Tick += async (_, _) => { debounce.Stop(); await RefreshAsync(); };
-        periodic.Tick += async (_, _) => { await RefreshAsync(); };
+        debounce.Tick += async (_, _) => { debounce.Stop(); await RefreshAsync(false); };
+        periodic.Tick += async (_, _) => { diagnostics?.Heartbeat(); await RefreshAsync(false); };
         PreviewKeyDown += (_, e) =>
         {
             if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.K) { OpenCommandPalette(); e.Handled = true; }
@@ -108,6 +116,7 @@ public sealed partial class MainWindow : Window
     public async Task StartMonitoringAsync() { if (monitoringStarted) return; monitoringStarted = true; await RefreshAsync(); periodic.Start(); }
     public void ShowSettings() { Render(); Show(); WindowState = WindowState.Normal; Activate(); }
     public void RefreshView() { if (IsVisible || smoke) Render(); DataChanged?.Invoke(); _ = RefreshAsync(); }
+    internal void RequestEnvironmentalRefresh() { fullScanRequested = true; ScheduleRefresh(); }
     public void ShowPage(string target) { Navigate(target); ShowSettings(); }
     public void CreateCollectionFromMenu() { ShowSettings(); AddCollection(); }
     public void UndoFromMenu() => Run(() => organizer.Undo());
@@ -327,7 +336,7 @@ public sealed partial class MainWindow : Window
         foreach (var (label, button) in navigation)
         {
             var active = label == page;
-            button.Background = active ? Tokens.Brush(Tokens.Primary100) : Brushes.Transparent;
+            button.Background = active ? Tokens.Primary100Brush : Brushes.Transparent;
             button.Foreground = active ? Ui.Accent : Ui.Muted;
             button.FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal;
         }
@@ -345,12 +354,14 @@ public sealed partial class MainWindow : Window
     }
     private void ShowError(Exception ex)
     {
+        diagnostics?.Record(DiagnosticKind.OperationFailed, error: ex);
         status.Text = "操作未完成：" + ex.Message;
         if (!smoke) MessageBox.Show(this, ex.Message, "操作未完成", MessageBoxButton.OK, MessageBoxImage.Warning);
     }
-    private async Task RefreshAsync()
+    private async Task RefreshAsync(bool force = true)
     {
         if (closed) return;
+        fullScanRequested |= force;
         if (refreshing) { refreshAgain = true; return; }
         refreshing = true;
         try
@@ -358,16 +369,30 @@ public sealed partial class MainWindow : Window
             do
             {
                 refreshAgain = false;
+                ConfigureWatchers();
                 var roots = organizer.WatchRoots;
                 var linked = organizer.State.Configuration.LinkedFiles.ToList();
-                var scan = await Task.Run(() => DesktopScanner.Scan(roots, linked));
+                var full = fullScanRequested || watcherWarnings.Count > 0 || DateTime.UtcNow - lastFullScanUtc >= TimeSpan.FromMinutes(5);
+                fullScanRequested = false;
+                var dirty = dirtyRoots.ToArray(); dirtyRoots.Clear();
+                ScanResult scan;
+                var scanClock = Stopwatch.StartNew();
+                try { scan = await Task.Run(() => scanner.Scan(roots, linked, dirty, full)); }
+                catch { fullScanRequested = true; throw; }
+                if (full) lastFullScanUtc = DateTime.UtcNow;
+                diagnostics?.Record(DiagnosticKind.Scan, scanClock.Elapsed.TotalMilliseconds, scan.Files.Count, scan.Warnings.Count, scanner.LastScannedDirectories);
                 if (closed) return;
                 if (!roots.SequenceEqual(organizer.WatchRoots, StringComparer.OrdinalIgnoreCase) || !linked.SequenceEqual(organizer.State.Configuration.LinkedFiles, StringComparer.OrdinalIgnoreCase)) { refreshAgain = true; continue; }
                 var changed = !organizer.Files.SequenceEqual(scan.Files);
-                var historyCount = organizer.State.History.Count;
-                organizer.ApplyScan(scan); ConfigureWatchers();
-                if (changed || firstScan || historyCount != organizer.State.History.Count) { firstScan = false; if (IsVisible || smoke) Render(); }
-                DataChanged?.Invoke();
+                var ageRules = organizer.State.Configuration.Rules.Any(r => r.Enabled && r.Conditions.Any(c => c.Field is "createdDays" or "modifiedDays"));
+                var classified = organizer.ApplyScan(scan, changed || firstScan || ageRules); ConfigureWatchers();
+                if (changed || firstScan || classified)
+                {
+                    var renderClock = Stopwatch.StartNew();
+                    firstScan = false; if (IsVisible || smoke) Render();
+                    DataChanged?.Invoke();
+                    diagnostics?.Record(DiagnosticKind.Refresh, renderClock.Elapsed.TotalMilliseconds, scan.Files.Count);
+                }
                 var problems = organizer.Warnings.Concat(watcherWarnings).ToList();
                 status.Text = problems.Count > 0 ? $"{problems.Count} 条提示 · {problems[0]}" : $"● 正在关注 {roots.Count} 个目录 · 上次同步 {DateTime.Now:HH:mm:ss}";
                 status.ToolTip = string.Join("\n", problems);
@@ -381,6 +406,7 @@ public sealed partial class MainWindow : Window
         var roots = organizer.MonitorRoots;
         var signature = string.Join("|", roots.Select(r => r + ":" + Directory.Exists(r)));
         if (signature == rootsSignature) return;
+        fullScanRequested = true;
         foreach (var watcher in watchers) watcher.Dispose(); watchers.Clear(); watcherWarnings.Clear();
         rootsSignature = signature;
         foreach (var root in roots.Where(Directory.Exists))
@@ -389,18 +415,32 @@ public sealed partial class MainWindow : Window
             {
                 var watcher = new FileSystemWatcher(root) { IncludeSubdirectories = false, NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.CreationTime | NotifyFilters.Size };
                 watcher.Created += OnFileChanged; watcher.Changed += OnFileChanged; watcher.Deleted += OnFileChanged; watcher.Renamed += OnFileChanged;
-                watcher.Error += (_, _) => Dispatcher.BeginInvoke(() => { rootsSignature = ""; ScheduleRefresh(); });
+                watcher.Error += (_, error) => Dispatcher.BeginInvoke(() => { diagnostics?.Record(DiagnosticKind.WatcherError, error: error.GetException()); rootsSignature = ""; ScheduleRefresh(); });
                 watcher.EnableRaisingEvents = true; watchers.Add(watcher);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
-            { watcherWarnings.Add($"实时监控不可用，使用每 30 秒扫描：{root}"); rootsSignature = ""; }
+            { diagnostics?.Record(DiagnosticKind.WatcherError, error: ex); watcherWarnings.Add($"实时监控不可用，使用每 30 秒扫描：{root}"); rootsSignature = ""; }
         }
     }
-    private void OnFileChanged(object sender, FileSystemEventArgs e) => Dispatcher.BeginInvoke(ScheduleRefresh);
+    private void OnFileChanged(object sender, FileSystemEventArgs e)
+    {
+        if (sender is FileSystemWatcher watcher)
+        {
+            pendingRoots[watcher.Path] = 0;
+            if (Interlocked.Exchange(ref pendingRefresh, 1) != 0) return;
+            Dispatcher.BeginInvoke(() =>
+            {
+                Interlocked.Exchange(ref pendingRefresh, 0);
+                foreach (var root in pendingRoots.Keys) { pendingRoots.TryRemove(root, out _); dirtyRoots.Add(root); }
+                if (!closed) ScheduleRefresh();
+            });
+        }
+    }
     private void ScheduleRefresh() { if (!closed) { debounce.Stop(); debounce.Start(); } }
 
     private void Render()
     {
+        if (Tokens.Theme.Id != ThemeIds.Normalize(organizer.State.Desktop.Theme)) Tokens.ApplyTheme(organizer.State.Desktop.Theme);
         BuildPageActions();
         var searchable = page is "桌面" or "收件箱" or "智能规则";
         toolbar.Visibility = searchable ? Visibility.Visible : Visibility.Collapsed;

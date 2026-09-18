@@ -33,6 +33,7 @@ internal static class DesktopNative
     [DllImport("user32.dll")] internal static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);
     [DllImport("user32.dll")] internal static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
     [DllImport("user32.dll")] internal static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] internal static extern bool SetForegroundWindow(IntPtr window);
     [DllImport("user32.dll")] internal static extern IntPtr WindowFromPoint(Point point);
     [DllImport("user32.dll")] internal static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] internal static extern void mouse_event(uint flags, uint x, uint y, uint data, UIntPtr extra);
@@ -66,7 +67,8 @@ internal static class DesktopNative
     [DllImport("user32.dll")] private static extern int SetWindowCompositionAttribute(IntPtr window, ref CompositionData data);
     internal static bool Acrylic(IntPtr window, byte opacity)
     {
-        var accent = new Accent { State = 4, Flags = 2, Color = ((uint)opacity << 24) | 0x00312722 };
+        var color = Tokens.Glass;
+        var accent = new Accent { State = 4, Flags = 2, Color = ((uint)opacity << 24) | ((uint)color.B << 16) | ((uint)color.G << 8) | color.R };
         var pointer = Marshal.AllocHGlobal(Marshal.SizeOf<Accent>());
         try { Marshal.StructureToPtr(accent, pointer, false); var data = new CompositionData { Attribute = 19, Data = pointer, Size = Marshal.SizeOf<Accent>() }; return SetWindowCompositionAttribute(window, ref data) != 0; }
         catch (EntryPointNotFoundException) { return false; }

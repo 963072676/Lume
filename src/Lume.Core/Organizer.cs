@@ -8,21 +8,26 @@ public sealed class Organizer(StateStore store, AppState state)
     public List<string> WatchRoots => State.Configuration.Roots.Concat(State.Configuration.Collections.Where(c => c.MappedPath != null).Select(c => c.MappedPath!)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     public List<string> MonitorRoots => WatchRoots.Concat(State.Configuration.LinkedFiles.Select(p => System.IO.Path.GetDirectoryName(p)!)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     public CardOptions Options(string id) => State.Desktop.Cards.GetValueOrDefault(id) ?? new();
-    public void SetOptions(string id, CardOptions options) => Transaction(() => State.Desktop.Cards[id] = options with { IconSize = Math.Clamp(options.IconSize, 24, 64) });
-    public void SetSnap(bool enabled) => Transaction(() => State.Desktop.SnapEnabled = enabled);
-    public void SetSystemEntries(bool enabled) => Transaction(() => State.Desktop.ShowSystemEntries = enabled);
+    public void SetOptions(string id, CardOptions options) => DesktopTransaction(() => State.Desktop.Cards[id] = options with { IconSize = Math.Clamp(options.IconSize, 24, 64) });
+    public void SetSnap(bool enabled) => DesktopTransaction(() => State.Desktop.SnapEnabled = enabled);
+    public void SetSystemEntries(bool enabled) => DesktopTransaction(() => State.Desktop.ShowSystemEntries = enabled);
+    public void SetTheme(string theme)
+    {
+        if (!ThemeIds.IsKnown(theme)) throw new ArgumentException("未知的主题配色。", nameof(theme));
+        DesktopTransaction(() => State.Desktop.Theme = theme);
+    }
     public void SetAllIconSize(int size)
     {
         if (size is not (26 or 34 or 48)) throw new ArgumentOutOfRangeException(nameof(size));
-        Transaction(() => { foreach (var c in State.Configuration.Collections) State.Desktop.Cards[c.Id] = Options(c.Id) with { IconSize = size }; });
+        DesktopTransaction(() => { foreach (var c in State.Configuration.Collections) State.Desktop.Cards[c.Id] = Options(c.Id) with { IconSize = size }; });
     }
-    public void SetAllCollapsed(bool collapsed) => Transaction(() =>
+    public void SetAllCollapsed(bool collapsed) => DesktopTransaction(() =>
     {
         foreach (var collection in State.Configuration.Collections)
             State.Desktop.Cards[collection.Id] = Options(collection.Id) with { Collapsed = collapsed };
     });
-    public void SetLayout(Dictionary<string, CardPlacement> positions) => Transaction(() => State.Desktop.Positions = positions);
-    public void RestoreDesktop(DesktopPreferences preferences) => Transaction(() => State.Desktop = StateStore.Clone(preferences));
+    public void SetLayout(Dictionary<string, CardPlacement> positions) => DesktopTransaction(() => State.Desktop.Positions = positions);
+    public void RestoreDesktop(DesktopPreferences preferences) => DesktopTransaction(() => State.Desktop = StateStore.Clone(preferences));
     public IReadOnlyList<DesktopFile> CollectionFiles(string id, string query = "")
     {
         var collection = State.Configuration.Collections.First(c => c.Id == id); var options = Options(id);
@@ -31,7 +36,13 @@ public sealed class Organizer(StateStore store, AppState state)
             : Files.Where(f => CollectionOf(f) == id && (State.Configuration.Overrides.ContainsKey(f.Path) || !State.Configuration.Collections.Any(c => c.MappedPath != null && string.Equals(System.IO.Path.GetDirectoryName(f.Path), c.MappedPath, StringComparison.OrdinalIgnoreCase))));
         selected = selected.Where(f => RuleEngine.Search(f, query));
         if (collection.Recent) return selected.ToList();
-        if (options.Sort == "manual") return selected.OrderBy(f => { var i = options.Order?.FindIndex(p => p.Equals(f.Path, StringComparison.OrdinalIgnoreCase)) ?? -1; return i < 0 ? int.MaxValue : i; }).ThenBy(f => f.Name).ToList();
+        if (options.Sort == "manual")
+        {
+            var order = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            if (options.Order != null)
+                for (var i = 0; i < options.Order.Count; i++) order.TryAdd(options.Order[i], i);
+            return selected.OrderBy(f => order.GetValueOrDefault(f.Path, int.MaxValue)).ThenBy(f => f.Name).ToList();
+        }
         Func<DesktopFile, object> key = options.Sort switch { "modified" => f => f.ModifiedUtc, "size" => f => f.Size, "type" => f => f.Extension, _ => f => f.Name };
         return (options.Descending ? selected.OrderByDescending(key) : selected.OrderBy(key)).ThenBy(f => f.Name).ToList();
     }
@@ -72,29 +83,38 @@ public sealed class Organizer(StateStore store, AppState state)
         SetOptions(collectionId, Options(collectionId) with { Sort = "manual", Order = files });
     }
     public string CollectionName(string id) => State.Configuration.Collections.FirstOrDefault(c => c.Id == id)?.Name ?? "临时收件箱";
-    public void SavePlacement(string id, CardPlacement placement) => Transaction(() => State.Desktop.Positions[id] = placement);
-    public void SetDesktopMode(int mode) => Transaction(() => State.Desktop.Mode = Math.Clamp(mode, 0, 2));
-    public void SetGlassOpacity(byte opacity) => Transaction(() => State.Desktop.GlassOpacity = (byte)Math.Clamp((int)opacity, 150, 235));
-    public void SetContextMenuEnabled(bool enabled) => Transaction(() => State.Desktop.ContextMenuEnabled = enabled);
+    public void SavePlacement(string id, CardPlacement placement) => DesktopTransaction(() => State.Desktop.Positions[id] = placement);
+    public void SetDesktopMode(int mode) => DesktopTransaction(() => State.Desktop.Mode = Math.Clamp(mode, 0, 2));
+    public void SetGlassOpacity(byte opacity) => DesktopTransaction(() => State.Desktop.GlassOpacity = (byte)Math.Clamp((int)opacity, 15, 240));
+    public void SetContextMenuEnabled(bool enabled) => DesktopTransaction(() => State.Desktop.ContextMenuEnabled = enabled);
+
+    private void DesktopTransaction(Action mutation)
+    {
+        var previous = StateStore.Clone(State.Desktop);
+        try { mutation(); store.SaveDesktop(State); }
+        catch { State.Desktop = previous; throw; }
+    }
 
     private void Transaction(Action mutation)
     {
-        var previous = StateStore.Clone(State);
+        var previous = StateStore.RollbackCopy(State);
         try { mutation(); store.Save(State); }
         catch { State = previous; StateStore.Normalize(State); throw; }
     }
 
-    public void ApplyScan(ScanResult scan)
+    public bool ApplyScan(ScanResult scan, bool reclassify = true)
     {
         Files = scan.Files;
         Warnings = scan.Warnings;
+        if (!reclassify) return false;
         var changes = CalculateChanges();
-        if (changes.Count == 0) return;
+        if (changes.Count == 0) return false;
         Transaction(() =>
         {
             foreach (var change in changes) State.Assignments[change.Path] = change.After;
             State.History.Add(new() { Title = $"自动归类 {changes.Count} 项", Detail = string.Join("\n", changes.Select(c => $"{System.IO.Path.GetFileName(c.Path)} → {CollectionName(c.After)}")), Changes = changes });
         });
+        return true;
     }
 
     private List<AssignmentChange> CalculateChanges() => Files.Select(f => new AssignmentChange(f.Path,
@@ -236,11 +256,23 @@ public sealed class Organizer(StateStore store, AppState state)
         suggestion.CollectionId, [new("extension", "in", suggestion.Extension)]));
     public void Dismiss(Suggestion suggestion) => Edit("忽略归类建议", c => c.DismissedSuggestions.Add(suggestion.Extension + "|" + suggestion.CollectionId));
 
-    public bool CanUndo => State.History.Any(h => !h.Undone);
+    public bool CanUndo => State.History.Any(h => !h.Undone) || State.HistoryArchives.Any(h => h.Undoable > 0);
+    public void RestoreBackup()
+    {
+        var restored = store.RestoreBackup();
+        State = restored; Files = []; Warnings = [];
+    }
     public void Undo()
     {
         var previouslyLinked = State.Configuration.LinkedFiles.ToList();
-        var entry = State.History.LastOrDefault(h => !h.Undone);
+        var history = State.History;
+        var archiveIndex = -1;
+        if (!history.Any(h => !h.Undone))
+        {
+            archiveIndex = State.HistoryArchives.FindLastIndex(h => h.Undoable > 0);
+            if (archiveIndex >= 0) history = store.ReadHistory(State.HistoryArchives[archiveIndex].File);
+        }
+        var entry = history.LastOrDefault(h => !h.Undone);
         if (entry == null) return;
         Transaction(() =>
         {
@@ -248,7 +280,10 @@ public sealed class Organizer(StateStore store, AppState state)
             else foreach (var change in entry.Changes) State.Configuration.Overrides[change.Path] = change.Before ?? "inbox";
             StateStore.Normalize(State);
             Reclassify();
-            entry.Undone = true;
+            var replacement = new HistoryEntry { Id = entry.Id, TimeUtc = entry.TimeUtc, Title = entry.Title, Detail = entry.Detail,
+                PreviousConfiguration = entry.PreviousConfiguration, Changes = entry.Changes, Undone = true };
+            history[history.IndexOf(entry)] = replacement;
+            if (archiveIndex >= 0) State.HistoryArchives[archiveIndex] = store.WriteHistory(history);
         });
         var removed = previouslyLinked.Except(State.Configuration.LinkedFiles, StringComparer.OrdinalIgnoreCase).ToHashSet(StringComparer.OrdinalIgnoreCase);
         Files = Files.Where(f => !removed.Contains(f.Path) || WatchRoots.Contains(System.IO.Path.GetDirectoryName(f.Path)!, StringComparer.OrdinalIgnoreCase)).ToList();

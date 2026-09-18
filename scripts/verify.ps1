@@ -9,6 +9,8 @@ New-Item -ItemType Directory -Path $evidence -Force | Out-Null
 & $DotnetPath run --project (Join-Path $projectRoot 'tests/Lume.Core.Tests') -c Release 2>&1 | Tee-Object -FilePath (Join-Path $evidence 'core-tests.txt')
 if ($LASTEXITCODE -ne 0) { throw '核心回归失败。' }
 if (!$SkipBuild) { & (Join-Path $PSScriptRoot 'build.ps1') -DotnetPath $DotnetPath -Verification 2>&1 | Tee-Object -FilePath (Join-Path $evidence 'build.txt') }
+& $DotnetPath run --project (Join-Path $projectRoot 'tests/Lume.Recovery.Tests') -c Release -- (Join-Path $appDirectory 'Lume.Guard.exe') (Join-Path $evidence 'native-recovery')
+if ($LASTEXITCODE -ne 0) { throw '原生恢复保护验收失败。' }
 $stages = @(
     @{ Flag='--menu-self-test'; Result='menu-verification/result.json'; Name='menu' },
     @{ Flag='--icons-self-test'; Result='icons-verification/result.json'; Name='icons' },
@@ -27,6 +29,12 @@ foreach ($stage in $stages) {
     Copy-Item -LiteralPath $resultPath -Destination (Join-Path $evidence ($stage.Name + '-result.json'))
     Write-Output ('PASS ' + $stage.Name)
 }
+$started = [DateTime]::UtcNow
+$process = Start-Process -FilePath (Join-Path $appDirectory 'Lume.exe') -ArgumentList '--performance-self-test' -WindowStyle Hidden -PassThru
+if (!$process.WaitForExit(60000)) { $process.Kill(); throw '性能与目录恢复验收超时。' }
+$result = Get-ChildItem -LiteralPath (Join-Path $appDirectory 'performance-verification') -Recurse -Filter result.json | Where-Object LastWriteTimeUtc -ge $started | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+if ($process.ExitCode -ne 0 -or !$result -or !(Get-Content -LiteralPath $result.FullName -Raw | ConvertFrom-Json).passed) { throw '性能与目录恢复验收失败。' }
+Copy-Item -LiteralPath $result.FullName -Destination (Join-Path $evidence 'performance-result.json')
 Get-FileHash -LiteralPath (Join-Path $appDirectory 'Lume.exe') -Algorithm SHA256 | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidence 'verification-binary.json')
 Write-Output ('验收完成：' + $evidence)
 if ($SkipInteractive) { Write-Output '本次显式跳过真实鼠标悬停与桌面交互，不代表完整桌面验收通过。' }

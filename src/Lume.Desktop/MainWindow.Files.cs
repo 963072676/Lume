@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using Lume.Core;
 namespace Lume.Desktop;
@@ -29,11 +30,11 @@ public sealed partial class MainWindow
             var marker = new Border { Width = 6, Height = 6, CornerRadius = new(3), Background = Ui.Brush(color), Margin = new(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center }; DockPanel.SetDock(marker, Dock.Left); row.Children.Add(marker);
             var label = Ui.Text(name, Tokens.Secondary, activeCollection == id ? Ui.Accent : Ui.Ink, activeCollection == id); label.TextWrapping = TextWrapping.NoWrap; label.TextTrimming = TextTrimming.CharacterEllipsis; row.Children.Add(label);
             button.Content = row; button.HorizontalContentAlignment = HorizontalAlignment.Stretch; button.Padding = new(12, 11, 12, 11); button.Margin = new(0, 0, 0, 4);
-            button.Background = activeCollection == id ? Tokens.Brush(Tokens.Primary100) : Brushes.Transparent; button.BorderThickness = new(0); button.ToolTip = name;
+            button.Background = activeCollection == id ? Tokens.Primary100Brush : Brushes.Transparent; button.BorderThickness = new(0); button.ToolTip = name;
             if (acceptsDrop && id != null) EnableCollectionDrop(button, id);
             links.Children.Add(button);
         }
-        Link(null, "全部文件", "#427765", all.Count, false);
+        Link(null, "全部文件", Tokens.Theme.Accent, all.Count, false);
         foreach (var (collection, files) in grouped) Link(collection.Id, collection.Name, collection.Color, files.Count, collection.MappedPath == null && !collection.Recent);
         rail.Children.Add(new ScrollViewer { Content = links }); layout.Children.Add(rail);
         var selected = activeCollection == null ? all : grouped.First(g => g.Collection.Id == activeCollection).Files.ToList();
@@ -55,7 +56,7 @@ public sealed partial class MainWindow
         if (selected.Count == 0)
         {
             var empty = new StackPanel { VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center, Margin = new(20) };
-            var symbol = Ui.Text("○", 42, Tokens.Brush(Tokens.Primary600)); symbol.HorizontalAlignment = HorizontalAlignment.Center; empty.Children.Add(symbol);
+            var symbol = Ui.Text("○", 42, Tokens.Primary600Brush); symbol.HorizontalAlignment = HorizontalAlignment.Center; empty.Children.Add(symbol);
             var title = Ui.Text(search.Text.Length > 0 ? "没有找到匹配文件" : "留一点空白，也很好", Tokens.SectionTitle, bold: true); title.Margin = new(0, 12, 0, 8); empty.Children.Add(title);
             empty.Children.Add(Ui.Text(search.Text.Length > 0 ? "换个关键词，或选择其他分区。" : "新文件会自动出现，也可以拖入分区。", Tokens.Secondary, Ui.Muted)); body.Children.Add(empty);
         }
@@ -153,7 +154,33 @@ public sealed partial class MainWindow
         button.KeyDown += (_, e) => { if (e.Key == Key.Enter) { OpenFile(file); e.Handled = true; } };
         button.PreviewKeyDown += (_, e) => { if (e.Key == Key.Space) { PreviewFile(file); e.Handled = true; } };
         button.ContextMenu = new ContextMenu();
-        button.ContextMenuOpening += (_, _) => { if (!scope.Model.Selected.Contains(file.Path)) scope.Model.Select(file.Path); scope.Refresh(); button.ContextMenu = FileMenu(file, scope); };
+        button.ContextMenuOpening += (_, e) =>
+        {
+            if (!scope.Model.Selected.Contains(file.Path)) scope.Model.Select(file.Path);
+            scope.Refresh();
+            DesktopNative.GetCursorPos(out var pt);
+            var window = Window.GetWindow(button);
+            var hwnd = window != null ? new WindowInteropHelper(window).Handle : IntPtr.Zero;
+            var paths = scope.Model.PathsFor(file.Path);
+            var collections = organizer.State.Configuration.Collections.Where(c => c.MappedPath == null && !c.Recent).ToList();
+            bool hasOverride = organizer.State.Configuration.Overrides.ContainsKey(file.Path);
+            if (ShellContextMenu.Show(
+                hwnd,
+                paths,
+                pt,
+                onAssignToCollection: targetId => { Run(() => organizer.AssignMany(paths, targetId)); scope.Clear(); },
+                onPreview: () => PreviewFile(file),
+                onReleaseOverride: () => Run(() => organizer.Release(file.Path)),
+                availableCollections: collections,
+                hasOverride: hasOverride))
+            {
+                e.Handled = true;
+            }
+            else
+            {
+                button.ContextMenu = FileMenu(file, scope);
+            }
+        };
         return button;
     }
 }

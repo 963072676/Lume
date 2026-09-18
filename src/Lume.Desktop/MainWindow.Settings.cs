@@ -13,7 +13,7 @@ public sealed partial class MainWindow
         settingsBody = new();
         var layout = new DockPanel(); var tabs = new StackPanel { Orientation = Orientation.Horizontal, Margin = new(0, 0, 0, 16) };
         settingsTabs.Clear();
-        foreach (var name in new[] { "常规", "分区", "目录", "AI 与数据" })
+        foreach (var name in new[] { "常规", "外观", "分区", "目录", "AI 与数据" })
         {
             var tab = Ui.Button(name, () => { settingsSection = name; RenderSettingsSection(); });
             settingsTabs[name] = tab; tabs.Children.Add(tab);
@@ -25,19 +25,82 @@ public sealed partial class MainWindow
     {
         foreach (var (name, button) in settingsTabs)
         {
-            button.Background = name == settingsSection ? Tokens.Brush(Tokens.Primary100) : Brushes.Transparent;
+            button.Background = name == settingsSection ? Tokens.Primary100Brush : Brushes.Transparent;
             button.Foreground = name == settingsSection ? Ui.Accent : Ui.Muted;
             button.BorderThickness = new(0);
         }
         var panel = new StackPanel();
         switch (settingsSection)
         {
+            case "外观": AddThemeSettings(panel); AddGlassSettings(panel); break;
             case "分区": AddCollectionsSettings(panel); AddGlassSettings(panel); break;
             case "目录": AddRootsSettings(panel); break;
             case "AI 与数据": AddAiSettings(panel); AddDataSettings(panel); break;
             default: AddGeneralSettings(panel); AddIntegrationSettings(panel); break;
         }
         settingsBody.Content = panel;
+    }
+    private void ApplyTheme(string id)
+    {
+        try
+        {
+            organizer.SetTheme(id);
+            Tokens.ApplyTheme(id);
+            // 仅同步色板状态，保留设置滚动位置和滑块控件。
+            SyncThemeChoices();
+            DataChanged?.Invoke();
+            status.Text = "已应用「" + Tokens.Theme.Name + "」· 自动保存";
+        }
+        catch (Exception ex) { ShowError(ex); }
+    }
+    private readonly Dictionary<string, Button> themeChoices = [];
+    private void SyncThemeChoices()
+    {
+        foreach (var (id, button) in themeChoices)
+        {
+            var selected = id == Tokens.Theme.Id;
+            Ui.SetSelected(button, selected);
+            button.BorderBrush = selected ? Ui.Accent : Tokens.Line200Brush;
+            button.BorderThickness = new(selected ? 2 : 1);
+            button.Background = selected ? Tokens.Primary50Brush : Brushes.White;
+            button.ToolTip = selected ? "当前主题" : "点击应用「" + ThemePalette.Find(id).Name + "」";
+            if (button.Tag is TextBlock label) label.Text = selected ? "✓ 当前使用" : "选择配色";
+        }
+    }
+    private void AddThemeSettings(StackPanel panel)
+    {
+        var body = new StackPanel();
+        body.Children.Add(Ui.Text("主题配色", Tokens.SectionTitle, bold: true));
+        var hint = Ui.Text("选一种喜欢的颜色，让桌面轻盈一点。切换立即生效，下次启动仍会保留。", Tokens.Secondary, Ui.Muted);
+        hint.Margin = new(0, 6, 0, 18); body.Children.Add(hint);
+        var choices = new WrapPanel(); themeChoices.Clear();
+        foreach (var palette in ThemePalette.All)
+        {
+            var preview = new StackPanel();
+            var swatches = new Grid { Height = 48, Margin = new(0, 0, 0, 12) };
+            foreach (var color in new[] { palette.Soft, palette.Selected, palette.Accent })
+            {
+                var index = swatches.ColumnDefinitions.Count;
+                swatches.ColumnDefinitions.Add(new());
+                var swatch = new Border { Background = Ui.Brush(color), CornerRadius = new(5), Margin = new(0, 0, index == 2 ? 0 : 4, 0) };
+                Grid.SetColumn(swatch, index); swatches.Children.Add(swatch);
+            }
+            preview.Children.Add(swatches);
+            preview.Children.Add(Ui.Text(palette.Name, Tokens.ItemTitle, bold: true));
+            var detail = Ui.Text(palette.Description, Tokens.Label, Ui.Muted); detail.Margin = new(0, 4, 0, 10); preview.Children.Add(detail);
+            var state = Ui.Text("", Tokens.Label, Ui.Accent); preview.Children.Add(state);
+            var button = Ui.Button("", () => ApplyTheme(palette.Id));
+            button.Content = preview; button.Tag = state;
+            button.Width = 160; button.Padding = new(14); button.Margin = new(0, 0, 12, 12);
+            button.HorizontalContentAlignment = HorizontalAlignment.Stretch;
+            Ui.SetHoverBrush(button, Brushes.Transparent);
+            System.Windows.Automation.AutomationProperties.SetName(button, "主题：" + palette.Name);
+            System.Windows.Automation.AutomationProperties.SetAutomationId(button, "Theme-" + palette.Id);
+            themeChoices[palette.Id] = button; choices.Children.Add(button);
+        }
+        SyncThemeChoices(); body.Children.Add(choices);
+        body.Children.Add(Ui.Text("同步调整按钮、选中状态和桌面玻璃底色；各分区的标识色保持独立。", Tokens.Label, Ui.Muted));
+        panel.Children.Add(Ui.Card(body));
     }
     private void AddAiSettings(StackPanel panel)
     {
@@ -134,22 +197,74 @@ public sealed partial class MainWindow
         var appearanceGrid = Ui.FormGrid();
         var configuredSizes = organizer.State.Configuration.Collections.Select(c => organizer.Options(c.Id).IconSize).ToList();
         var sizes = configuredSizes.Distinct().ToList();
-        var iconSize = BuildSegmented([("小", 26), ("中", 34), ("大", 48)], sizes.Count == 1 ? sizes[0] : -1, size => Run(() => organizer.SetAllIconSize(size)));
+        var iconSize = BuildSegmented([("小", 26), ("中", 34), ("大", 48)], sizes.Count == 1 ? sizes[0] : -1, size =>
+        {
+            organizer.SetAllIconSize(size);
+            DataChanged?.Invoke();
+            status.Text = "已应用全局图标大小";
+        });
         Ui.AddFormRow(appearanceGrid, "图标大小", sizes.Count > 1 ? "当前各分区大小不同，选择后统一。" : "全部分区统一调整。", iconSize, 0);
         var snap = new CheckBox { Content = Ui.Text("显示对齐线并吸附", Tokens.Secondary), IsChecked = organizer.State.Desktop.SnapEnabled };
-        snap.Click += (_, _) => Run(() => organizer.SetSnap(snap.IsChecked == true)); Ui.AddFormRow(appearanceGrid, "对齐吸附", "拖动时自动对齐；按住 Alt 临时关闭。", snap, 1);
+        snap.Click += (_, _) =>
+        {
+            organizer.SetSnap(snap.IsChecked == true);
+            DataChanged?.Invoke();
+            status.Text = "已更新对齐吸附设置";
+        };
+        Ui.AddFormRow(appearanceGrid, "对齐吸附", "拖动时自动对齐；按住 Alt 临时关闭。", snap, 1);
         glass.Children.Add(appearanceGrid);
-        var opacity = new Slider { Minimum = 150, Maximum = 235, Value = Math.Clamp(organizer.State.Desktop.GlassOpacity, (byte)150, (byte)235), Margin = new Thickness(0, 16, 0, 8), TickFrequency = 5, IsSnapToTickEnabled = true };
-        opacity.PreviewMouseLeftButtonUp += (_, _) => Run(() => organizer.SetGlassOpacity((byte)opacity.Value));
-        opacity.KeyUp += (_, _) => Run(() => organizer.SetGlassOpacity((byte)opacity.Value));
-        glass.Children.Add(opacity); glass.Children.Add(Ui.Text("调整分区底色深浅。静态壁纸柔化，文字保持清晰。", Tokens.Label, Ui.Muted)); panel.Children.Add(Ui.Card(glass));
+        var opacity = new Slider { Minimum = 15, Maximum = 240, Value = Math.Clamp(organizer.State.Desktop.GlassOpacity, (byte)15, (byte)240), Margin = new Thickness(0, 16, 0, 8), TickFrequency = 5, IsSnapToTickEnabled = true };
+        void ApplyOpacity(bool commit)
+        {
+            var val = (byte)Math.Clamp((int)opacity.Value, 15, 240);
+            if (commit)
+            {
+                organizer.SetGlassOpacity(val);
+                status.Text = "已保存底色深浅";
+            }
+            else
+            {
+                organizer.State.Desktop.GlassOpacity = val;
+            }
+            DataChanged?.Invoke();
+        }
+        opacity.ValueChanged += (_, _) =>
+        {
+            if (opacity.IsMouseCaptureWithin || opacity.IsFocused)
+                ApplyOpacity(false);
+        };
+        opacity.PreviewMouseLeftButtonUp += (_, _) => ApplyOpacity(true);
+        opacity.KeyUp += (_, _) => ApplyOpacity(true);
+        glass.Children.Add(opacity); glass.Children.Add(Ui.Text("调整分区底色深浅。向左更通透清爽，向右更深沉对比。", Tokens.Label, Ui.Muted)); panel.Children.Add(Ui.Card(glass));
     }
     private void AddDataSettings(StackPanel panel)
     {
         var data = new StackPanel(); data.Children.Add(Ui.Text("本地数据与恢复", Tokens.SectionTitle, bold: true));
         var dataGrid = Ui.FormGrid(); Ui.AddFormRow(dataGrid, "配置文件", store.Path, Ui.Button("打开目录", () => ShellOpen(Path.GetDirectoryName(store.Path)!)), 0);
-        Ui.AddFormRow(dataGrid, "备份策略", "每次保存保留一份 .bak；配置异常时停止加载，不覆盖原文件。", Ui.Text("自动", Tokens.Secondary, Ui.Brush(Tokens.Success600), true), 1);
+        Ui.AddFormRow(dataGrid, "备份策略", "配置、外观和历史分开保存；恢复时保留原配置。", Ui.Button("校验并恢复备份", () =>
+        {
+            try
+            {
+                var backup = store.InspectBackup();
+                if (MessageBox.Show(this, $"恢复 {backup.SavedUtc.ToLocalTime():yyyy-MM-dd HH:mm} 的备份？包含 {backup.Collections} 个分区、{backup.HistoryEntries} 条历史。原配置会另行保留。", "恢复配置", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+                Run(organizer.RestoreBackup); RefreshView();
+            }
+            catch (Exception ex) { ShowError(ex); }
+        }), 1);
         Ui.AddFormRow(dataGrid, "快捷键", "Ctrl+K 命令面板 · Ctrl+F 搜索 · Ctrl+Z 撤销 · Ctrl+Alt+1 / 2 / 3 切换视图。", Ui.Text("已启用", Tokens.Secondary, Ui.Brush(Tokens.Success600), true), 2);
+        Ui.AddFormRow(dataGrid, "运行诊断", "日志最多约 1 MiB，只记录耗时、数量和错误码，不包含文件名、路径或密钥。", Ui.Button("导出脱敏诊断…", () =>
+        {
+            if (diagnostics == null) { status.Text = "当前验收模式未启用运行诊断"; return; }
+            var dialog = new SaveFileDialog { Filter = "ZIP 诊断包|*.zip", FileName = "Lume-诊断.zip" };
+            if (dialog.ShowDialog(this) != true) return;
+            try
+            {
+                diagnostics.Export(dialog.FileName, new(organizer.Files.Count, organizer.WatchRoots.Count, organizer.State.Configuration.Collections.Count,
+                    organizer.State.History.Count + organizer.State.HistoryArchives.Sum(a => a.Count), IsDesktopPaused?.Invoke() ?? false));
+                status.Text = "已导出脱敏诊断";
+            }
+            catch (Exception ex) { ShowError(ex); }
+        }), 3);
         data.Children.Add(dataGrid);
         panel.Children.Add(Ui.Card(data));
     }

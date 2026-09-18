@@ -37,12 +37,13 @@ public sealed partial class MainWindow
             search.Text = "不存在的关键词"; Check(boardSelection.Model.Selected.Count == 0, "筛选自动清除不可见选择");
             Capture(Path.Combine(folder, "empty.png"));
             Navigate("设置"); Render(); Render();
-            foreach (var section in new[] { "常规", "分区", "目录", "AI 与数据" })
+            foreach (var section in new[] { "常规", "外观", "分区", "目录", "AI 与数据" })
             {
                 settingsSection = section; RenderSettingsSection(); UpdateLayout();
                 Capture(Path.Combine(folder, "settings-" + section + ".png"));
             }
             Check(notifications == 0, "导航和搜索不会重建桌面分区"); DataChanged -= Changed;
+            VerifyThemes(folder, Check);
             Width = MinWidth; Height = MinHeight; Navigate("桌面"); Capture(Path.Combine(folder, "compact.png"));
             Width = 1000; Height = 720;
             var fixtureRoot = organizer.State.Configuration.Roots[0];

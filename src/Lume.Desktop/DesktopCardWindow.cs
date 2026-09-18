@@ -185,15 +185,14 @@ internal sealed class DesktopCardWindow : Window
     public void ApplyGlass()
     {
         if (Handle == IntPtr.Zero) return;
-        var key = placement + ":" + organizer.State.Desktop.GlassOpacity + ":" + WallpaperGlass.SourceKey();
+        var key = placement + ":" + organizer.State.Desktop.GlassOpacity + ":" + Tokens.Theme.Id + ":" + WallpaperGlass.SourceKey();
         if (key == glassSignature) return;
         glassSignature = key;
-        var configured = (byte)Math.Clamp(organizer.State.Desktop.GlassOpacity, (byte)150, (byte)235);
-        var effective = WallpaperGlass.AverageBrightnessAt(placement) > .6 ? Math.Max(configured, (byte)190) : configured;
-        NativeGlassApplied = DesktopNative.Acrylic(Handle, effective);
+        var configured = (byte)Math.Clamp(organizer.State.Desktop.GlassOpacity, (byte)15, (byte)240);
+        NativeGlassApplied = DesktopNative.Acrylic(Handle, configured);
         try { backdrop.Background = WallpaperGlass.At(placement); } catch (Exception ex) when (ex is System.IO.IOException or NotSupportedException or System.Runtime.InteropServices.COMException) { backdrop.Background = null; }
         GlassApplied = NativeGlassApplied || backdrop.Background != null;
-        tint.Background = new SolidColorBrush(Color.FromArgb(effective, 25, 35, 32));
+        tint.Background = Tokens.Alpha(Tokens.Glass, configured);
     }
     public void UpdateFiles(bool force = false)
     {

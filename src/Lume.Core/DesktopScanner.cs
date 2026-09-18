@@ -4,7 +4,7 @@ public sealed record ScanResult(List<DesktopFile> Files, List<string> Warnings);
 
 public static class DesktopScanner
 {
-    public static ScanResult Scan(IEnumerable<string> roots, IEnumerable<string>? linkedFiles = null)
+    public static ScanResult Scan(IEnumerable<string> roots, IEnumerable<string>? linkedFiles = null, Func<DesktopFile, ShortcutTarget?>? readShortcut = null)
     {
         var result = new Dictionary<string, DesktopFile>(StringComparer.OrdinalIgnoreCase);
         var warnings = new List<string>();
@@ -43,7 +43,7 @@ public static class DesktopScanner
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { warnings.Add($"暂时无法读取：{path}"); }
         }
-        var files = result.Values.Select(f => f with { Target = f.IsDirectory ? null : ShortcutReader.Read(f.Path) }).ToList();
+        var files = result.Values.Select(f => f with { Target = f.IsDirectory ? null : readShortcut != null ? readShortcut(f) : ShortcutReader.Read(f.Path) }).ToList();
         return new(MergeDesktopShortcuts(files, Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
             Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory)).OrderBy(f => f.Name, StringComparer.CurrentCultureIgnoreCase).ToList(), warnings);
     }

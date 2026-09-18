@@ -27,3 +27,9 @@ $target = Join-Path $OutputPath $name
 if (!(Test-Path -LiteralPath $target)) { Copy-Item -LiteralPath $dll -Destination $target }
 Set-Content -LiteralPath (Join-Path $OutputPath 'shell-extension.txt') -Value $name -Encoding UTF8
 Write-Output ('原生菜单：' + $target)
+$guard = Join-Path $root 'src/Lume.Shell/LumeGuard.cpp'
+$guardCommand = 'call "{0}" >nul && cl /nologo /MT /O2 /W4 /WX /EHsc /utf-8 /std:c++17 "{1}" /Fe:Lume.Guard.exe /link shell32.lib user32.lib /SUBSYSTEM:WINDOWS /Brepro' -f $vcvars,$guard
+Push-Location $build
+try { & $env:ComSpec /d /c $guardCommand; if ($LASTEXITCODE -ne 0) { throw '原生恢复保护进程编译失败。' } } finally { Pop-Location }
+Copy-Item -LiteralPath (Join-Path $build 'Lume.Guard.exe') -Destination $OutputPath -Force
+Write-Output ('原生恢复保护：' + (Join-Path $OutputPath 'Lume.Guard.exe'))

@@ -1,26 +1,66 @@
 using System.Windows;
 using System.Windows.Media;
+using System.Windows.Data;
+using System.ComponentModel;
 
 namespace Lume.Desktop;
 
 /// <summary>所有窗口共用的视觉契约。用户可选的分区色只作为标识，不在这里充当文字色。</summary>
 internal static class Tokens
 {
-    public static readonly Color Primary50 = Color.FromRgb(0xEE, 0xF4, 0xF0);
-    public static readonly Color Primary100 = Color.FromRgb(0xDC, 0xE9, 0xE2);
-    public static readonly Color Primary600 = Color.FromRgb(0x35, 0x6B, 0x57);
-    public static readonly Color Primary700 = Color.FromRgb(0x28, 0x52, 0x40);
-    public static readonly Color Primary900 = Color.FromRgb(0x24, 0x33, 0x2E);
+    public static ThemePalette Theme { get; private set; } = ThemePalette.Find(null);
+    // 共享画刷保持引用稳定，已打开的窗口和控件无需重建即可换色。
+    public static readonly SolidColorBrush Primary50Brush = ThemeBrush(Theme.Soft);
+    public static readonly SolidColorBrush Primary100Brush = ThemeBrush(Theme.Selected);
+    public static readonly SolidColorBrush Primary600Brush = ThemeBrush(Theme.Accent);
+    public static readonly SolidColorBrush Primary700Brush = ThemeBrush(Theme.Hover);
+    public static readonly SolidColorBrush Primary900Brush = ThemeBrush(Theme.Deep);
+    public static Color Primary50 => Primary50Brush.Color;
+    public static Color Primary100 => Primary100Brush.Color;
+    public static Color Primary600 => Primary600Brush.Color;
+    public static Color Primary700 => Primary700Brush.Color;
+    public static Color Primary900 => Primary900Brush.Color;
+    public static Color Glass => ThemePalette.ColorOf(Theme.Glass);
 
-    public static readonly Color Ink900 = Color.FromRgb(0x24, 0x33, 0x2E);
-    public static readonly Color Ink700 = Color.FromRgb(0x3A, 0x4A, 0x42);
-    public static readonly Color Ink500 = Color.FromRgb(0x5F, 0x6B, 0x65);
-    public static readonly Color Ink300 = Color.FromRgb(0x8A, 0x94, 0x8F);
+    public static void ApplyTheme(string? id)
+    {
+        Theme = ThemePalette.Find(id);
+        SetThemeBrush(Primary50Brush, Theme.Soft);
+        SetThemeBrush(Primary100Brush, Theme.Selected);
+        SetThemeBrush(Primary600Brush, Theme.Accent);
+        SetThemeBrush(Primary700Brush, Theme.Hover);
+        SetThemeBrush(Primary900Brush, Theme.Deep);
+    }
+
+    // Binding 防止 WPF 在模板或样式中自动冻结共享画刷。
+    private sealed class LiveColor(string value) : INotifyPropertyChanged
+    {
+        public Color Color { get; private set; } = ThemePalette.ColorOf(value);
+        public event PropertyChangedEventHandler? PropertyChanged;
+        public void Set(string value)
+        {
+            Color = ThemePalette.ColorOf(value);
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Color)));
+        }
+    }
+    private static SolidColorBrush ThemeBrush(string value)
+    {
+        var brush = new SolidColorBrush();
+        BindingOperations.SetBinding(brush, SolidColorBrush.ColorProperty, new Binding(nameof(LiveColor.Color)) { Source = new LiveColor(value), Mode = BindingMode.OneWay });
+        return brush;
+    }
+    private static void SetThemeBrush(SolidColorBrush brush, string value) =>
+        ((LiveColor)BindingOperations.GetBinding(brush, SolidColorBrush.ColorProperty)!.Source).Set(value);
+
+    public static readonly Color Ink900 = Color.FromRgb(0x27, 0x33, 0x43);
+    public static readonly Color Ink700 = Color.FromRgb(0x43, 0x50, 0x62);
+    public static readonly Color Ink500 = Color.FromRgb(0x63, 0x70, 0x80);
+    public static readonly Color Ink300 = Color.FromRgb(0x8B, 0x96, 0xA5);
 
     public static readonly Color Surface0 = Colors.White;
-    public static readonly Color Surface50 = Color.FromRgb(0xF5, 0xF7, 0xF6);
-    public static readonly Color Line100 = Color.FromRgb(0xE9, 0xED, 0xE7);
-    public static readonly Color Line200 = Color.FromRgb(0xD6, 0xDC, 0xD3);
+    public static readonly Color Surface50 = Color.FromRgb(0xF6, 0xF8, 0xFB);
+    public static readonly Color Line100 = Color.FromRgb(0xE7, 0xEC, 0xF2);
+    public static readonly Color Line200 = Color.FromRgb(0xD5, 0xDE, 0xE9);
 
     public static readonly Color Danger600 = Color.FromRgb(0xB3, 0x40, 0x2F);
     public static readonly Color Warning600 = Color.FromRgb(0xA9, 0x6A, 0x12);

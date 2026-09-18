@@ -1,5 +1,7 @@
 using Lume.Core;
 
+if (args.Length == 2 && args[0] == "--benchmark") return Benchmark.Run(args[1]);
+
 if (args.Length == 3 && args[0] == "--rule-audit")
 {
     var state = new StateStore(args[1]).Load([]);
@@ -63,6 +65,9 @@ Test("删除分区保留文件并可完整撤销", () => { var o = Create("delet
 Test("收件箱不可删除且分区可重命名", () => { var o = Create("rename"); Throws<InvalidOperationException>(() => o.DeleteCollection("inbox")); o.RenameCollection("work", "项目资料"); Equal(o.CollectionName("work"), "项目资料"); o.Undo(); Equal(o.CollectionName("work"), "工作资料"); });
 
 ArchiveTests.Register(Test, root);
+PerformanceTests.Register(Test, root);
+StorageTests.Register(Test, root);
+DiagnosticsTests.Register(Test, root);
 RuleMatchingTests.Register(Test, root);
 AiAnalysisTests.Register(Test, root);
 InteractionTests.Register(Test, root);
@@ -105,6 +110,33 @@ Test("全部折叠展开持久化且保留位置锁定与排序", () =>
     Equal(o.Options(id), new CardOptions(true, false, "size", true, 48));
 });
 DesktopFeatureTests.Register(Test, root);
+Test("主题选择持久化且不改变分区和透明度", () =>
+{
+    var o = Create("themes"); var before = StateStore.Clone(o.State.Desktop);
+    var colors = o.State.Configuration.Collections.Select(c => c.Color).ToArray();
+    foreach (var theme in new[] { "sky", "lavender", "apricot", "sage" })
+    {
+        o.SetTheme(theme);
+        Equal(new StateStore(Path.Combine(root, "themes", "state.json")).Load([]).Desktop.Theme, theme);
+        Equal(o.State.Desktop.GlassOpacity, before.GlassOpacity);
+        True(colors.SequenceEqual(o.State.Configuration.Collections.Select(c => c.Color)));
+    }
+    Throws<ArgumentException>(() => o.SetTheme("invalid")); Equal(o.State.Desktop.Theme, "sage");
+    var restored = LayoutBackup.Apply(LayoutBackup.Capture(before), o.State.Desktop, colors);
+    Equal(restored.Theme, "sage");
+});
+Test("旧配置和未知主题回退到晴空蓝", () =>
+{
+    var path = Path.Combine(root, "legacy-theme.json");
+    var json = System.Text.Json.JsonSerializer.Serialize(AppState.Create([]));
+    File.WriteAllText(path, json.Replace("\"Theme\":\"sky\",", ""));
+    Equal(new StateStore(path).Load([]).Desktop.Theme, "sky");
+    foreach (var value in new[] { "\"future-theme\"", "null" })
+    {
+        File.WriteAllText(path, json.Replace("\"Theme\":\"sky\"", "\"Theme\":" + value));
+        Equal(new StateStore(path).Load([]).Desktop.Theme, "sky");
+    }
+});
 SelectionTests.Register(Test);
 var failed = 0;
 try

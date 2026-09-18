@@ -20,6 +20,30 @@ internal static class DesktopVerification
         if (surface.Cards.Any(c => (DesktopNative.GetStyle(c.Handle, -16).ToInt64() & 0x40000000L) == 0)) throw new InvalidOperationException("分区不具有 WS_CHILD 样式。");
         if (DesktopNative.IsWindowVisible(DesktopNative.FindDesktop().Icons)) throw new InvalidOperationException("原图标未隐藏。");
         if (settings.IsVisible) throw new InvalidOperationException("设置中心不应在启动时显示。");
+        var originalTheme = organizer.State.Desktop.Theme;
+        IEnumerable<System.Windows.Controls.Border> Borders(DependencyObject node)
+        {
+            if (node is System.Windows.Controls.Border border) yield return border;
+            for (var i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(node); i++)
+                foreach (var child in Borders(System.Windows.Media.VisualTreeHelper.GetChild(node, i))) yield return child;
+        }
+        try
+        {
+            foreach (var palette in ThemePalette.All)
+            {
+                organizer.SetTheme(palette.Id); Tokens.ApplyTheme(palette.Id); surface.Refresh();
+                var expected = Tokens.Alpha(Tokens.Glass, organizer.State.Desktop.GlassOpacity).Color;
+                var windows = surface.Cards.Cast<Window>().ToList();
+                if (surface.SystemEntries != null) windows.Add(surface.SystemEntries);
+                foreach (var card in windows)
+                {
+                    card.UpdateLayout();
+                    if (!Borders(card).Any(b => b.Background is System.Windows.Media.SolidColorBrush brush && brush.Color == expected))
+                        throw new InvalidOperationException(palette.Name + "未更新桌面分区玻璃底色：" + card.Title);
+                }
+            }
+        }
+        finally { organizer.SetTheme(originalTheme); Tokens.ApplyTheme(originalTheme); surface.Refresh(); }
         var toggled = false;
         var foregroundAnchor = new Window { Title = "Lume · 桌面显示验收", Width = 240, Height = 100, ShowInTaskbar = false };
         try

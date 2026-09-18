@@ -15,6 +15,7 @@ public static class Program
         catch (Exception ex) { MessageBox.Show(ex.Message, "Lume 启动环境修复失败"); return 1; }
         if (args.FirstOrDefault() == "--guard") return DesktopRecovery.Guard(args);
 #if VERIFICATION
+        if (args.Contains("--performance-self-test")) return MainWindow.RunPerformanceVerification(args);
         if (args.Contains("--menu-self-test")) return DesktopMenuVerification.Run();
         if (args.Contains("--icons-self-test")) return IconVerification.Run();
         if (args.Contains("--features-self-test")) return FeatureVerification.Run(!args.Contains("--no-input"));
@@ -61,6 +62,8 @@ public static class Program
                 Directory.CreateDirectory(Path.Combine(demoRoot, "正在进行的项目"));
                 roots = [demoRoot];
             }
+            using var diagnostics = new RuntimeDiagnostics(Path.Combine(data, "diagnostics"));
+            diagnostics.Record(DiagnosticKind.Startup);
             var store = new StateStore(Path.Combine(data, "state.json"));
             var importIndex = Array.IndexOf(args, "--import-packaged-data");
             if (!demo && importIndex >= 0)
@@ -68,15 +71,26 @@ public static class Program
                 if (importIndex + 1 >= args.Length || PackageIsolation.IsPackaged) throw new IOException("旧数据迁移参数或进程环境无效。");
                 PackageIsolation.ImportData(args[importIndex + 1], data);
             }
-            var organizer = new Organizer(store, store.Load(roots));
+            AppState state;
+            try { state = store.Load(roots); }
+            catch (Exception ex) when (!demo && ex is IOException or InvalidDataException or UnauthorizedAccessException)
+            {
+                var backup = store.InspectBackup();
+                var message = $"配置读取失败。已找到通过校验的备份：{backup.SavedUtc.ToLocalTime():yyyy-MM-dd HH:mm}，{backup.Collections} 个分区，{backup.HistoryEntries} 条历史。\n\n恢复后继续启动？原配置会另行保留。";
+                if (MessageBox.Show(message, "恢复 Lume 配置", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes) return 1;
+                state = store.RestoreBackup();
+            }
+            var organizer = new Organizer(store, state);
             var app = new Application();
+            Tokens.ApplyTheme(organizer.State.Desktop.Theme);
             Ui.InstallStyles(app);
             app.DispatcherUnhandledException += (_, e) =>
             {
+                diagnostics.Record(DiagnosticKind.Unhandled, error: e.Exception);
                 MessageBox.Show(e.Exception.Message, "操作未完成", MessageBoxButton.OK, MessageBoxImage.Warning);
                 e.Handled = true;
             };
-            var window = new MainWindow(organizer, store, demo, args.Contains("--smoke"));
+            var window = new MainWindow(organizer, store, demo, args.Contains("--smoke"), diagnostics);
             window.Archives = new ArchiveService(Path.Combine(data, "archive-journal"));
             if (args.Contains("--smoke")) { app.Run(window); return window.VerificationExitCode; }
             using var surfaceMutex = new Mutex(true, "Local\\Lume.Desktop.Surface", out var surfaceFirst);
@@ -86,9 +100,17 @@ public static class Program
             using var commands = new DesktopCommandSignals(demo);
             app.ShutdownMode = ShutdownMode.OnExplicitShutdown; app.MainWindow = window; window.Resident = true;
             using var surface = new DesktopSurface(organizer, data, window.BuildFileTile, window.RefreshView, window.ShowSettings, id => window.OpenArchive(id));
+            window.IsDesktopPaused = () => surface.Paused;
             void Quit() { surface.Dispose(); window.Exiting = true; window.Close(); app.Shutdown(); }
             using var tray = new TrayService(window.ShowSettings, async () => await surface.ToggleAsync(), () => window.OpenArchive(), Quit);
-            surface.Error += tray.Notify; window.DataChanged += surface.Refresh;
+            surface.Error += message => { diagnostics.Record(DiagnosticKind.SurfaceError); tray.Notify(message); }; window.DataChanged += surface.Refresh;
+            Microsoft.Win32.PowerModeChangedEventHandler powerChanged = (_, e) =>
+            {
+                if (e.Mode == Microsoft.Win32.PowerModes.Resume) app.Dispatcher.BeginInvoke(() => { diagnostics.Record(DiagnosticKind.Resume); window.RequestEnvironmentalRefresh(); surface.RequestRebuild(); });
+            };
+            EventHandler displaysChanged = (_, _) => app.Dispatcher.BeginInvoke(() => { diagnostics.Record(DiagnosticKind.DisplayChanged); window.RequestEnvironmentalRefresh(); surface.RequestRebuild(); });
+            Microsoft.Win32.SystemEvents.PowerModeChanged += powerChanged;
+            Microsoft.Win32.SystemEvents.DisplaySettingsChanged += displaysChanged;
             async Task DispatchAsync(string command)
             {
                 switch (command)
@@ -118,28 +140,24 @@ public static class Program
             }
             // 命令面板的暂停/启用/退出经由同一条命令通道，避免两套分发逻辑走偏。
             window.GlobalCommand = DispatchAsync;
-            var signals = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
-            var ready = false; var handling = false;
-            signals.Tick += async (_, _) =>
+            var menuSignals = commands.Signals;
+            using var signals = new DesktopSignalPump(app.Dispatcher, new WaitHandle[] { exit, activate }.Concat(menuSignals.Select(s => s.Signal)).ToList(), async selected =>
             {
-                if (!ready || handling) return;
-                handling = true;
                 try
                 {
-                    if (exit.WaitOne(0)) { Quit(); return; }
-                    if (activate.WaitOne(0)) window.ShowSettings();
-                    var command = commands.Take(); if (command != null) await DispatchAsync(command);
+                    if (selected == 0) { Quit(); return; }
+                    if (selected == 1) window.ShowSettings();
+                    else await DispatchAsync(menuSignals[selected - 2].Command);
                 }
                 catch (Exception ex) { tray.Notify(ex.Message); }
-                finally { handling = false; }
-            }; signals.Start();
+            });
             var code = 0;
             app.Startup += async (_, _) =>
             {
                 try
                 {
                     await Task.Run(() => window.Archives.RecoverAsync()); await window.StartMonitoringAsync(); await surface.StartAsync();
-                    ready = true;
+                    signals.Start();
                     if (!demo)
                     {
                         try { if (organizer.State.Desktop.ContextMenuEnabled) DesktopMenu.Register(); else DesktopMenu.Unregister(); }
@@ -154,13 +172,13 @@ public static class Program
                 }
                 catch (Exception ex)
                 {
-                    ready = true;
+                    signals.Start();
                     code = 1;
                     if (desktopSmoke) { Directory.CreateDirectory(data); File.WriteAllText(Path.Combine(data, "desktop-error.txt"), ex.ToString()); Quit(); }
                     else { tray.Notify(ex.Message); window.ShowSettings(); }
                 }
             };
-            app.Exit += (_, _) => { surface.Dispose(); signals.Stop(); };
+            app.Exit += (_, _) => { Microsoft.Win32.SystemEvents.PowerModeChanged -= powerChanged; Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= displaysChanged; surface.Dispose(); signals.Dispose(); };
             app.Run(); return code;
         }
         catch (Exception ex)

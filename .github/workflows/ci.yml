@@ -17,7 +17,7 @@ concurrency:
 jobs:
   windows:
     runs-on: windows-2025
-    timeout-minutes: 20
+    timeout-minutes: 30
     defaults:
       run:
         shell: pwsh
@@ -25,9 +25,11 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-dotnet@v6.0.0
         with:
-          dotnet-version: '10.0.x'
-      - name: 核心回归
-        run: dotnet run --project tests/Lume.Core.Tests -c Release
+          global-json-file: global.json
+      - name: 非交互完整验收
+        run: ./scripts/verify.ps1 -SkipInteractive
+      - name: 性能回归
+        run: ./scripts/benchmark.ps1
       - name: 构建完整便携版
         run: ./scripts/build.ps1
       - name: 构建精简版
@@ -43,3 +45,46 @@ jobs:
             artifacts/*.zip
             artifacts/*.sha256
           if-no-files-found: error
+      - uses: actions/upload-artifact@v7.0.1
+        if: always()
+        with:
+          name: verification-results
+          path: |
+            artifacts/verification-*/**/*result.json
+            artifacts/verification-*/core-tests.txt
+            artifacts/benchmark.json
+          if-no-files-found: warn
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: Lume-win-x64
+          path: release-assets
+      - name: 发布已验证版本
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $version = ([xml](Get-Content Directory.Build.props -Raw)).Project.PropertyGroup.Version
+          if ($env:RELEASE_TAG -cne "v$version") { throw '标签与源码版本不一致。' }
+          $notes = "docs/releases/$version.md"
+          if (!(Test-Path $notes)) { throw '缺少本版发布说明。' }
+          foreach ($checksum in Get-ChildItem release-assets -Filter '*.sha256') {
+            $fields = (Get-Content $checksum.FullName -Raw).Trim() -split '\s+', 2
+            if ([IO.Path]::GetFileName($fields[1]) -ne $fields[1]) { throw '非法校验文件名。' }
+            if ((Get-FileHash (Join-Path release-assets $fields[1]) -Algorithm SHA256).Hash -ine $fields[0]) { throw '发布包校验失败。' }
+          }
+          $assets = @(Get-ChildItem release-assets -File | ForEach-Object FullName)
+          if ($assets.Count -ne 4) { throw '发布必须包含完整包、精简包和两个校验文件。' }
+          $options = @('--verify-tag', '--title', "Lume $version", '--notes-file', $notes)
+          if ($version.Contains('-')) { $options += @('--prerelease', '--latest=false') }
+          gh release create $env:RELEASE_TAG @assets @options
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub 发布失败。' }

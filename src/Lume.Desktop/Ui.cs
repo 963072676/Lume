@@ -19,13 +19,21 @@ public static class Ui
     public static SolidColorBrush Brush(Color color) => Tokens.Brush(color);
     public static readonly Brush Ink = Tokens.Brush(Tokens.Ink900);
     public static readonly Brush Muted = Tokens.Brush(Tokens.Ink500);
-    public static readonly Brush Accent = Tokens.Brush(Tokens.Primary600);
+    public static readonly Brush Accent = Tokens.Primary600Brush;
     public static readonly Brush SecondaryInk = Tokens.Brush(Tokens.Ink700);
     public static readonly Brush Danger = Tokens.Brush(Tokens.Danger600);
     public const string EmptyDropText = "拖到这里归类";
 
     public static void InstallStyles(Application app)
     {
+        app.Resources["Theme.Ink"] = Ink;
+        app.Resources["Theme.SecondaryInk"] = SecondaryInk;
+        app.Resources["Theme.Surface"] = Tokens.Brush(Tokens.Surface50);
+        app.Resources["Theme.Line"] = Tokens.Line200Brush;
+        app.Resources["Theme.Muted"] = Muted;
+        app.Resources["Theme.Soft"] = Tokens.Primary50Brush;
+        app.Resources["Theme.Accent"] = Tokens.Primary600Brush;
+        app.Resources["Theme.Hover"] = Tokens.Primary700Brush;
         app.Resources.MergedDictionaries.Add(new ResourceDictionary { Source = new Uri("/Lume;component/Styles.xaml", UriKind.Relative) });
         var windowStyle = new Style(typeof(Window), (Style)app.Resources[typeof(Window)]);
         windowStyle.Setters.Add(new Setter(Window.IconProperty,
@@ -90,16 +98,16 @@ public static class Ui
         else
         {
             // 选中填充必须与模板悬停色 #EEF4F0 拉开色阶，否则多选后无法确认选中项。
-            button.Background = selected ? Tokens.Brush(Tokens.Primary100) : Brushes.Transparent;
+            button.Background = selected ? Tokens.Primary100Brush : Brushes.Transparent;
             button.BorderBrush = selected ? Accent : Brushes.Transparent;
-            button.Foreground = selected ? Tokens.Brush(Tokens.Primary700) : Ink;
+            button.Foreground = selected ? Tokens.Primary700Brush : Ink;
         }
         button.BorderThickness = new Thickness(selected ? 2 : 1);
     }
     public static Border Badge(string text, Brush? foreground = null, Brush? background = null) => new()
     {
         Child = Text(text, Tokens.Label, foreground ?? Ink, true),
-        Background = background ?? Tokens.Brush(Tokens.Primary100), BorderBrush = Brushes.Transparent,
+        Background = background ?? Tokens.Primary100Brush, BorderBrush = Brushes.Transparent,
         CornerRadius = new CornerRadius(10), Padding = new Thickness(8, 2, 8, 2),
         HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center
     };

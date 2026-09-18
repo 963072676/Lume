@@ -29,7 +29,7 @@ public sealed partial class MainWindow
             var toggle = Ui.Button(rule.Enabled ? "已启用" : "已停用", () => Run(() => organizer.SaveRule(rule with { Enabled = !rule.Enabled })));
             toggle.Width = 64; toggle.Height = 28; toggle.MinHeight = 28; toggle.Padding = new Thickness(8, 4, 8, 4); toggle.HorizontalContentAlignment = HorizontalAlignment.Center;
             toggle.ToolTip = rule.Enabled ? "点击停用规则" : "点击启用规则";
-            toggle.Background = rule.Enabled ? Tokens.Brush(Tokens.Primary100) : Tokens.Brush(Tokens.Surface50); toggle.Foreground = rule.Enabled ? Ui.Accent : Ui.Muted; actions.Children.Add(toggle);
+            toggle.Background = rule.Enabled ? Tokens.Primary100Brush : Tokens.Brush(Tokens.Surface50); toggle.Foreground = rule.Enabled ? Ui.Accent : Ui.Muted; actions.Children.Add(toggle);
             actions.Children.Add(Ui.Button("编辑", () => EditRule(rule)));
             var remove = Ui.Button("删除", () => Run(() => organizer.DeleteRule(rule.Id))); remove.Foreground = Ui.Danger; actions.Children.Add(remove);
             Grid.SetColumn(actions, 2); body.Children.Add(actions);
@@ -42,6 +42,18 @@ public sealed partial class MainWindow
     {
         var panel = new StackPanel();
         var archiveButton = Ui.Button("物理归档…", () => OpenArchive()); archiveButton.HorizontalAlignment = HorizontalAlignment.Left; panel.Children.Add(archiveButton);
+        var export = Ui.Button("导出完整整理历史…", () =>
+        {
+            var dialog = new SaveFileDialog { Filter = "JSON 历史记录|*.json", FileName = "Lume-整理历史.json" };
+            if (dialog.ShowDialog(this) != true) return;
+            try { store.ExportHistory(organizer.State, dialog.FileName); status.Text = "已导出完整整理历史（含文件名与路径，请妥善保管）"; }
+            catch (Exception ex) { ShowError(ex); }
+        }); export.HorizontalAlignment = HorizontalAlignment.Left; panel.Children.Add(export);
+        if (organizer.State.HistoryArchives.Count > 0)
+        {
+            panel.Children.Add(Ui.Text($"较早的 {organizer.State.HistoryArchives.Sum(a => a.Count)} 条记录已分段保存，仍可继续撤销和完整导出。", Tokens.Secondary, Ui.Muted));
+            if (!organizer.State.History.Any(h => !h.Undone) && organizer.CanUndo) panel.Children.Add(Ui.Button("撤销上一条较早记录", () => Run(organizer.Undo)));
+        }
         panel.Children.Add(Ui.Text("物理归档可以恢复到原位置；虚拟归类只改变 Lume 的归属。", Tokens.Secondary, Ui.Muted));
         Border TimelineCard(Brush lineColor, string type, string title, string detail, UIElement? action = null)
         {
@@ -75,7 +87,7 @@ public sealed partial class MainWindow
         foreach (var entry in organizer.State.History.AsEnumerable().Reverse().Take(150))
         {
             UIElement? undo = ReferenceEquals(entry, last) ? Ui.Button("撤销这一步", () => Run(() => organizer.Undo()), true) : null;
-            panel.Children.Add(TimelineCard(Tokens.Brush(Tokens.Primary600), "虚拟归类", $"{entry.Title}{(entry.Undone ? " · 已撤销" : "")}  ·  {entry.TimeUtc.ToLocalTime():MM-dd HH:mm:ss}", entry.Detail, undo));
+            panel.Children.Add(TimelineCard(Tokens.Primary600Brush, "虚拟归类", $"{entry.Title}{(entry.Undone ? " · 已撤销" : "")}  ·  {entry.TimeUtc.ToLocalTime():MM-dd HH:mm:ss}", entry.Detail, undo));
         }
         if (organizer.State.History.Count == 0 && !hasPhysicalHistory) panel.Children.Add(Ui.Text("还没有整理记录。首次扫描或修改规则后，记录会出现在这里。", Tokens.ItemTitle, Ui.Muted));
         else if (organizer.State.History.Count > 150) panel.Children.Add(Ui.Text("界面显示最近 150 条，完整记录保存在本地配置中。", Tokens.Label, Ui.Muted));

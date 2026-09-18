@@ -31,7 +31,7 @@ internal static class PackageIsolation
     }
     internal static bool RelaunchIfNeeded(string[] args)
     {
-        if (args.Any(a => a is "--guard" or "--menu-self-test" or "--icons-self-test" or "--features-self-test" or "--demo" or "--smoke" or "--desktop-smoke") || !IsPackaged) return false;
+        if (args.Any(a => a is "--guard" or "--performance-self-test" or "--menu-self-test" or "--icons-self-test" or "--features-self-test" or "--demo" or "--smoke" or "--desktop-smoke") || !IsPackaged) return false;
         var exe = Environment.ProcessPath ?? throw new IOException("无法定位 Lume。");
         if (!string.Equals(Path.GetFileName(exe), "Lume.exe", StringComparison.OrdinalIgnoreCase)) return false;
         var data = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Lume");
@@ -86,6 +86,10 @@ internal static class PackageIsolation
         foreach (var name in new[] { "state.json", "state.json.bak", "layout-before-restore.json" }) CopyFile(Path.Combine(source, name), Path.Combine(stage, name));
         var journal = Path.Combine(source, "archive-journal");
         if (Directory.Exists(journal)) CopyDirectory(journal, Path.Combine(stage, "archive-journal"));
+        foreach (var path in Directory.EnumerateFiles(source, "state.json.desktop.*")) CopyFile(path, Path.Combine(stage, Path.GetFileName(path)));
+        var history = Path.Combine(source, "state.json.history");
+        if (Directory.Exists(history)) CopyDirectory(history, Path.Combine(stage, "state.json.history"));
+        CopyFile(Path.Combine(source, "state.json.legacy.bak"), Path.Combine(stage, "state.json.legacy.bak"));
         _ = new Lume.Core.StateStore(Path.Combine(stage, "state.json")).Load([]);
         if (Directory.Exists(target)) Directory.Delete(target, false);
         Directory.Move(stage, target);

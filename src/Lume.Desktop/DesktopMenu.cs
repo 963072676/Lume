@@ -142,5 +142,6 @@ internal sealed class DesktopCommandSignals : IDisposable
         using (signal) return signal.Set();
     }
     public string? Take() => events.FirstOrDefault(pair => pair.Value.WaitOne(0)).Key;
+    internal IReadOnlyList<(string Command, WaitHandle Signal)> Signals => events.Select(p => (p.Key, (WaitHandle)p.Value)).ToList();
     public void Dispose() { foreach (var signal in events.Values) signal.Dispose(); }
 }

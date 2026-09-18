@@ -9,6 +9,14 @@ internal sealed record DesktopLease(long Icons, uint ExplorerPid, bool WasVisibl
 
 internal static class DesktopRecovery
 {
+    public static Process LaunchGuard(Process parent, string leasePath)
+    {
+        var native = Path.Combine(AppContext.BaseDirectory, "Lume.Guard.exe");
+        if (!File.Exists(native)) return Launch("--guard", parent.Id.ToString(), parent.StartTime.ToUniversalTime().Ticks.ToString(), leasePath);
+        var start = new ProcessStartInfo(native) { UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden };
+        start.ArgumentList.Add(parent.Id.ToString()); start.ArgumentList.Add(parent.StartTime.ToUniversalTime().Ticks.ToString()); start.ArgumentList.Add(leasePath);
+        return Process.Start(start) ?? throw new IOException("无法启动桌面恢复保护进程。");
+    }
     public static Process Launch(params string[] arguments)
     {
         var executable = Environment.ProcessPath ?? throw new InvalidOperationException("无法确定程序路径。");
@@ -34,6 +42,29 @@ internal static class DesktopRecovery
         var lease = new DesktopLease(icons.ToInt64(), pid, DesktopNative.IsWindowVisible(icons), overlays);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(lease)); File.Move(path + ".tmp", path, true);
+        SaveNativeLease(path, lease);
+    }
+    internal static void SaveNativeLease(string path, DesktopLease lease)
+    {
+        var entries = new[] { new OverlayLease(lease.Icons, lease.ExplorerPid, "SysListView32", lease.WasVisible) }.Concat(lease.Overlays ?? []).ToList();
+        if (entries.Count > 65) throw new IOException("桌面图层数量超出恢复保护范围。");
+        var temp = path + ".native.tmp";
+        try
+        {
+            using (var writer = new BinaryWriter(new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None)))
+            {
+                writer.Write(0x31474d4cu); writer.Write(entries.Count);
+                foreach (var entry in entries)
+                {
+                    if (entry.ClassName is not ("SysListView32" or "TXMiniSkin")) throw new IOException("未知的桌面图层类型。");
+                    writer.Write(entry.Handle); writer.Write(entry.Pid); writer.Write(entry.WasVisible ? 1u : 0u);
+                    var name = new byte[64]; System.Text.Encoding.ASCII.GetBytes(entry.ClassName).CopyTo(name, 0); writer.Write(name);
+                }
+                writer.Flush(); ((FileStream)writer.BaseStream).Flush(true);
+            }
+            File.Move(temp, path + ".native", true);
+        }
+        finally { if (File.Exists(temp)) File.Delete(temp); }
     }
     public static void Restore(string path)
     {
@@ -50,6 +81,7 @@ internal static class DesktopRecovery
             }
         }
         File.Delete(path);
+        File.Delete(path + ".native");
     }
     public static void HideManagedLayers(string path)
     {

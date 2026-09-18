@@ -12,15 +12,17 @@
 
 ## 下载与运行
 
-到 [Releases](https://github.com/963072676/Lume/releases/latest) 下载 **0.1.0**：
+稳定版为 [0.1.0](https://github.com/963072676/Lume/releases/tag/v0.1.0)。新功能和性能优化可下载 **[0.2.0-beta.1 预览版](https://github.com/963072676/Lume/releases/tag/v0.2.0-beta.1)**，升级前请先阅读[升级与回退](docs/升级与回退.md)。以下功能说明对应预览版源码。
 
 | 下载包 | 适用情况 |
 | --- | --- |
-| `Lume-0.1.0-win-x64.zip` | 完整便携版，自带运行环境，解压即用 |
-| `Lume-0.1.0-win-x64-lite.zip` | 精简版，需要 .NET 10 Windows Desktop Runtime x64 |
+| `Lume-0.2.0-beta.1-win-x64.zip` | 完整便携版，自带运行环境，解压即用 |
+| `Lume-0.2.0-beta.1-win-x64-lite.zip` | 精简版，需要 .NET 10 Windows Desktop Runtime x64 |
 
 适用于 Windows 10 2004 及以上、Windows 11，x64。解压后运行 `Lume.exe`，保留同目录的 DLL 和 `shell-extension.txt`。
-程序默认显示桌面分区并驻留托盘，双击托盘图标打开管理窗口；关闭窗口继续运行，托盘退出恢复 Windows 原桌面。
+程序默认显示桌面分区并驻留托盘，双击托盘图标打开管理窗口；关闭窗口继续运行，托盘退出恢复 Windows 原桌面。请保留 `Lume.Guard.exe`，它负责异常退出后的桌面恢复。
+
+预览版的真实休眠、多屏和 Explorer 重启验收尚未完成，环境边界及故障处理见[支持与已知问题](docs/支持与已知问题.md)。上方截图来自 0.1.0，不代表全部新主题。
 
 ## 可以做什么
 
@@ -35,7 +37,7 @@
 
 ## 从源码构建
 
-需要 Windows x64、PowerShell 7、.NET 10 SDK，以及安装了“使用 C++ 的桌面开发”组件的 Visual Studio 2022 或更新版本构建工具。
+需要 Windows x64、PowerShell 7、`global.json` 指定的 .NET 10.0.400 SDK，以及安装了“使用 C++ 的桌面开发”组件的 Visual Studio 2022 或更新版本构建工具。
 
 ```powershell
 git clone https://github.com/963072676/Lume.git
@@ -51,7 +53,7 @@ cd Lume
 
 ## 数据与边界
 
-配置保存在 `%LOCALAPPDATA%\Lume`，保存时保留上一份 `.bak`。已有本地分区、规则、布局及 AI 配置可继续使用。
+配置保存在 `%LOCALAPPDATA%\Lume`，保存时保留上一份 `.bak`。已有本地分区、规则、布局及 AI 配置可继续使用。性能优化版将设置与历史分开存储，备份时请复制整个数据目录；迁移前原配置保存在 `state.json.legacy.bak`。设置页支持校验恢复备份和脱敏诊断导出。
 API Key 使用 Windows 当前用户加密；AI 默认发送文件名称、应用信息与分区信息，不发送完整路径、正文或截图。开启 AI 前请确认服务方的数据处理方式。
 
 只扫描关注目录第一层。壁纸柔化基于静态壁纸；不提供全盘索引、自动更新或定时归档。
@@ -59,7 +61,7 @@ API Key 使用 Windows 当前用户加密；AI 默认发送文件名称、应用
 
 ## 参与项目
 
-欢迎通过 [Issues](https://github.com/963072676/Lume/issues) 提交问题或建议，修改前可阅读 [贡献指南](CONTRIBUTING.md)。
+欢迎通过 [Issues](https://github.com/963072676/Lume/issues) 提交问题或建议，修改前可阅读 [贡献指南](CONTRIBUTING.md)、[架构与贡献任务](docs/架构与贡献任务.md)和[性能复测](docs/性能复测.md)。
 安全问题请按 [安全说明](SECURITY.md) 私下报告。
 
 代码采用 [MIT 许可证](LICENSE)。

@@ -32,6 +32,7 @@ internal sealed class DesktopSurface : IDisposable
     internal SystemDesktopWindow? SystemEntries => systemEntries;
     internal int VisibleGuideCount => guides.VisibleCount;
     public bool Paused => paused;
+    internal void RequestRebuild() { displaySignature = ""; }
     public bool Attached => !paused && cards.Count > 0 && cards.All(c => DesktopNative.GetParent(c.Handle) == view && DesktopNative.IsWindowVisible(c.Handle));
     public DesktopSurface(Organizer organizer, string dataDirectory, Func<DesktopFile, TileSelection, UIElement> tile, Action refresh, Action settings, Action<string> archive)
     {
@@ -53,7 +54,7 @@ internal sealed class DesktopSurface : IDisposable
         DesktopRecovery.Restore(Path.Combine(Path.GetDirectoryName(leasePath)!, "desktop-lease.json"));
         foreach (var previous in Directory.EnumerateFiles(Path.GetDirectoryName(leasePath)!, "desktop-lease-*.json")) DesktopRecovery.Restore(previous);
         var process = Process.GetCurrentProcess();
-        guard = DesktopRecovery.Launch("--guard", process.Id.ToString(), process.StartTime.ToUniversalTime().Ticks.ToString(), leasePath);
+        guard = DesktopRecovery.LaunchGuard(process, leasePath);
         for (var i = 0; i < 60 && !File.Exists(leasePath + ".ready") && !guard.HasExited; i++) await Task.Delay(50);
         if (!File.Exists(leasePath + ".ready")) throw new IOException("桌面恢复保护进程未就绪，未接管原图标。");
         await RebuildAsync(); health.Start();
@@ -101,26 +102,29 @@ internal sealed class DesktopSurface : IDisposable
         if (systemSignature == signature) { systemEntries?.RefreshPlacement(); return; }
         systemEntries?.Close(); systemEntries = null; systemSignature = signature;
         if (!organizer.State.Desktop.ShowSystemEntries || entries.Count == 0) return;
-        var context = DesktopNative.SetThreadDpiAwarenessContext(DesktopNative.GetWindowDpiAwarenessContext(view));
-        try { systemEntries = new SystemDesktopWindow(organizer, view, settings, entries); systemEntries.Show(); }
-        finally { DesktopNative.SetThreadDpiAwarenessContext(context); }
+       var context = DesktopNative.SetThreadDpiAwarenessContext(DesktopNative.GetWindowDpiAwarenessContext(view));
+        try { systemEntries = new SystemDesktopWindow(organizer, view, settings, entries, Adjust, () => guides.Dispose()); systemEntries.Show(); }
+       finally { DesktopNative.SetThreadDpiAwarenessContext(context); }
     }
     public void Refresh()
     {
         if (paused || disposed || rebuilding || view == IntPtr.Zero) return;
         var ids = organizer.State.Configuration.Collections.Where(c => organizer.State.Desktop.Mode == 0 || organizer.State.Desktop.Mode == 1 && c.InWork || organizer.State.Desktop.Mode == 2 && c.InPresentation).Select(c => c.Id);
         if (!ids.SequenceEqual(cards.Select(c => c.CollectionId))) { CloseCards(); CreateCards(); }
-        foreach (var card in cards) { card.UpdateFiles(); card.ApplyGlass(); }
-        RefreshSystemEntries();
-    }
+       foreach (var card in cards) { card.UpdateFiles(); card.ApplyGlass(); }
+       RefreshSystemEntries();
+        systemEntries?.ApplyGlass();
+   }
     private CardPlacement Adjust(string id, CardPlacement requested, string edges)
     {
         var screen = Forms.Screen.FromPoint(new System.Drawing.Point(requested.X + requested.Width / 2, requested.Y + Math.Min(40, requested.Height / 2))).WorkingArea;
         var area = new CardPlacement(screen.X, screen.Y, screen.Width, screen.Height);
         requested = LayoutEngine.Constrain(requested, area);
-        if (!organizer.State.Desktop.SnapEnabled || System.Windows.Input.Keyboard.Modifiers.HasFlag(System.Windows.Input.ModifierKeys.Alt)) { guides.Dispose(); return requested; }
-        var result = LayoutEngine.Snap(requested, cards.Where(c => c.CollectionId != id).Select(c => c.Placement), area, 8, edges);
-        var constrained = LayoutEngine.Constrain(result.Placement, area);
+       if (!organizer.State.Desktop.SnapEnabled || System.Windows.Input.Keyboard.Modifiers.HasFlag(System.Windows.Input.ModifierKeys.Alt)) { guides.Dispose(); return requested; }
+        var peers = cards.Where(c => c.CollectionId != id).Select(c => c.Placement);
+        if (systemEntries != null && id != SystemDesktopWindow.PositionId) peers = peers.Append(systemEntries.Placement);
+        var result = LayoutEngine.Snap(requested, peers, area, 8, edges);
+       var constrained = LayoutEngine.Constrain(result.Placement, area);
         guides.Show(view, constrained == result.Placement ? result.Guides : []); return constrained;
     }
     public async Task ToggleAsync()
