@@ -23,7 +23,10 @@ foreach ($stage in $stages) {
     $process = Start-Process -FilePath (Join-Path $appDirectory 'Lume.exe') -ArgumentList $stage.Flag -WindowStyle Hidden -PassThru
     if (!$process.WaitForExit(60000)) { $process.Kill(); throw ($stage.Name + ' 验收超时；桌面保护进程负责恢复原图标。') }
     $resultPath = Join-Path $appDirectory $stage.Result
-    if ($process.ExitCode -ne 0 -or !(Test-Path -LiteralPath $resultPath) -or (Get-Item -LiteralPath $resultPath).LastWriteTimeUtc -lt $started) { throw ($stage.Name + ' 验收失败，请检查 ' + $appDirectory + ' 中本次 error.txt。') }
+    if ($process.ExitCode -ne 0 -or !(Test-Path -LiteralPath $resultPath) -or (Get-Item -LiteralPath $resultPath).LastWriteTimeUtc -lt $started) {
+        Get-ChildItem -LiteralPath $appDirectory -Recurse -Filter '*error.txt' | Where-Object LastWriteTimeUtc -ge $started | ForEach-Object { Get-Content -LiteralPath $_.FullName }
+        throw ($stage.Name + ' 验收失败，退出码：' + $process.ExitCode)
+    }
     $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
     if ($result.passed -eq $false) { throw ($stage.Name + ' 未通过。') }
     Copy-Item -LiteralPath $resultPath -Destination (Join-Path $evidence ($stage.Name + '-result.json'))

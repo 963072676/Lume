@@ -95,7 +95,7 @@ internal static class IconVerification
         try
         {
             dynamic shortcut = shell.CreateShortcut(path);
-            try { shortcut.TargetPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "notepad.exe"); shortcut.IconLocation = icon + ",0"; shortcut.Save(); }
+            try { shortcut.TargetPath = Environment.ProcessPath!; shortcut.IconLocation = icon + ",0"; shortcut.Save(); }
             finally { Marshal.FinalReleaseComObject(shortcut); }
         }
         finally { Marshal.FinalReleaseComObject(shell); }
