@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   windows:
-    runs-on: windows-2022
+    runs-on: windows-2025
     timeout-minutes: 30
     defaults:
       run:
@@ -26,10 +26,10 @@ jobs:
       - uses: actions/setup-dotnet@v6.0.0
         with:
           global-json-file: global.json
-      - name: 非交互完整验收
+      - name: 非交互验收（功能预览在桌面 Windows 验收）
         env:
           LUME_VERIFY_SOFTWARE_RENDERING: '1'
-        run: ./scripts/verify.ps1 -SkipInteractive
+        run: ./scripts/verify.ps1 -SkipInteractive -SkipFeaturePreview
       - name: 性能回归
         run: ./scripts/benchmark.ps1
       - name: 构建完整便携版

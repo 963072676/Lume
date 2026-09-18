@@ -1,4 +1,4 @@
-param([string]$DotnetPath = 'dotnet', [switch]$SkipBuild, [switch]$SkipDesktop, [switch]$SkipInteractive)
+param([string]$DotnetPath = 'dotnet', [switch]$SkipBuild, [switch]$SkipDesktop, [switch]$SkipInteractive, [switch]$SkipFeaturePreview)
 $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $DotnetPath = & (Join-Path $PSScriptRoot 'resolve-dotnet.ps1') -DotnetPath $DotnetPath
@@ -17,6 +17,9 @@ $stages = @(
     @{ Flag=$(if ($SkipInteractive) { '--features-self-test --no-input' } else { '--features-self-test' }); Result='features-verification/result.json'; Name='features' },
     @{ Flag='--smoke'; Result='smoke/result.json'; Name='ui' }
 )
+if ($SkipFeaturePreview) { $stages = @($stages | Where-Object Name -ne 'features') }
+@{ skippedFeaturePreview = $SkipFeaturePreview.IsPresent; skippedInteractive = $SkipInteractive.IsPresent; skippedDesktop = ($SkipDesktop -or $SkipInteractive); softwareRendering = ($env:LUME_VERIFY_SOFTWARE_RENDERING -eq '1') } |
+    ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidence 'coverage-result.json')
 if (!$SkipDesktop -and !$SkipInteractive) { $stages += @{ Flag='--desktop-smoke'; Result='demo-data/desktop-verification/result.json'; Name='desktop' } }
 foreach ($stage in $stages) {
     $started = [DateTime]::UtcNow
@@ -46,3 +49,4 @@ Copy-Item -LiteralPath $result.FullName -Destination (Join-Path $evidence 'perfo
 Get-FileHash -LiteralPath (Join-Path $appDirectory 'Lume.exe') -Algorithm SHA256 | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidence 'verification-binary.json')
 Write-Output ('验收完成：' + $evidence)
 if ($SkipInteractive) { Write-Output '本次显式跳过真实鼠标悬停与桌面交互，不代表完整桌面验收通过。' }
+if ($SkipFeaturePreview) { Write-Output '本次显式跳过功能预览验收；发布前必须在桌面 Windows 运行不带 -SkipFeaturePreview 的检查。' }
