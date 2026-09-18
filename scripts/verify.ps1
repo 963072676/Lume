@@ -1,4 +1,4 @@
-param([string]$DotnetPath = 'dotnet', [switch]$SkipBuild, [switch]$SkipDesktop, [switch]$SkipInteractive)
+param([string]$DotnetPath = 'dotnet', [switch]$SkipBuild, [switch]$SkipDesktop, [switch]$SkipInteractive, [switch]$SkipMedia)
 $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $DotnetPath = & (Join-Path $PSScriptRoot 'resolve-dotnet.ps1') -DotnetPath $DotnetPath
@@ -14,7 +14,7 @@ if ($LASTEXITCODE -ne 0) { throw '原生恢复保护验收失败。' }
 $stages = @(
     @{ Flag='--menu-self-test'; Result='menu-verification/result.json'; Name='menu' },
     @{ Flag='--icons-self-test'; Result='icons-verification/result.json'; Name='icons' },
-    @{ Flag=$(if ($SkipInteractive) { '--features-self-test --no-input' } else { '--features-self-test' }); Result='features-verification/result.json'; Name='features' },
+    @{ Flag=('--features-self-test' + $(if ($SkipInteractive) { ' --no-input' }) + $(if ($SkipMedia) { ' --no-media' })); Result='features-verification/result.json'; Name='features' },
     @{ Flag='--smoke'; Result='smoke/result.json'; Name='ui' }
 )
 if (!$SkipDesktop -and !$SkipInteractive) { $stages += @{ Flag='--desktop-smoke'; Result='demo-data/desktop-verification/result.json'; Name='desktop' } }
@@ -46,3 +46,4 @@ Copy-Item -LiteralPath $result.FullName -Destination (Join-Path $evidence 'perfo
 Get-FileHash -LiteralPath (Join-Path $appDirectory 'Lume.exe') -Algorithm SHA256 | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidence 'verification-binary.json')
 Write-Output ('验收完成：' + $evidence)
 if ($SkipInteractive) { Write-Output '本次显式跳过真实鼠标悬停与桌面交互，不代表完整桌面验收通过。' }
+if ($SkipMedia) { Write-Output '本次显式跳过媒体控件生命周期，需在桌面 Windows 上单独验收。' }

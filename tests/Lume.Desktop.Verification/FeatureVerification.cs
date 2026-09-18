@@ -12,7 +12,7 @@ namespace Lume.Desktop;
 
 internal static class FeatureVerification
 {
-    internal static int Run(bool interactive = true)
+    internal static int Run(bool interactive = true, bool skipMedia = false)
     {
         var folder = Path.Combine(AppContext.BaseDirectory, "features-verification"); Directory.CreateDirectory(folder);
         var fixture = Path.Combine(folder, "fixtures", Guid.NewGuid().ToString("N")); Directory.CreateDirectory(fixture);
@@ -45,7 +45,7 @@ internal static class FeatureVerification
                 var thumbnail = await ShellIcons.GetAsync(files.Single(f => f.Name == "图片.png"));
                 var brokenThumbnail = await ShellIcons.GetAsync(files.Single(f => f.Name == "损坏.png"));
                 Check(thumbnail is BitmapSource picture && (brokenThumbnail is not BitmapSource brokenPicture || !ShellIcons.SamePixels(picture, brokenPicture)), "图片文件图标显示内容缩略图且与损坏图片备用图标区分");
-                foreach (var name in new[] { "项目计划.txt", "图片.png", "文档.docx", "表格.xlsx", "演示.pptx", "压缩包.zip", "两页.pdf", "静音.wav", "损坏.png" })
+                foreach (var name in new[] { "项目计划.txt", "图片.png", "文档.docx", "表格.xlsx", "演示.pptx", "压缩包.zip", "两页.pdf", "静音.wav", "损坏.png" }.Where(name => !skipMedia || name != "静音.wav"))
                 {
                     Progress("preview " + name);
                     var file = files.Single(f => f.Name == name); var original = File.ReadAllBytes(file.Path);
@@ -92,7 +92,7 @@ internal static class FeatureVerification
                 ruleDialog.Close(); ruleOwner.Close();
                 Progress("AI verification"); await AiVerification.RunAsync(folder, checks);
                 Progress("visual verification"); await VisualVerification.RunAsync(checks, interactive, Progress);
-                await File.WriteAllTextAsync(Path.Combine(folder, "result.json"), JsonSerializer.Serialize(new { passed = true, interactive, checks }, new JsonSerializerOptions { WriteIndented = true }));
+                await File.WriteAllTextAsync(Path.Combine(folder, "result.json"), JsonSerializer.Serialize(new { passed = true, interactive, skipped = skipMedia ? new[] { "媒体控件生命周期（--no-media）" } : Array.Empty<string>(), checks }, new JsonSerializerOptions { WriteIndented = true }));
             }
             catch (Exception ex) { exit = 1; File.WriteAllText(Path.Combine(folder, "error.txt"), ex.ToString()); }
             finally { window?.Close(); app.Shutdown(); }

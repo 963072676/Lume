@@ -20,7 +20,7 @@ public static class Program
         if (args.Contains("--performance-self-test")) return MainWindow.RunPerformanceVerification(args);
         if (args.Contains("--menu-self-test")) return DesktopMenuVerification.Run();
         if (args.Contains("--icons-self-test")) return IconVerification.Run();
-        if (args.Contains("--features-self-test")) return FeatureVerification.Run(!args.Contains("--no-input"));
+        if (args.Contains("--features-self-test")) return FeatureVerification.Run(!args.Contains("--no-input"), args.Contains("--no-media"));
 #else
         if (args.Any(arg => arg.Contains("self-test", StringComparison.Ordinal) || arg.Contains("smoke", StringComparison.Ordinal))) return 2;
 #endif
