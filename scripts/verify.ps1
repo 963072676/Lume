@@ -26,6 +26,10 @@ foreach ($stage in $stages) {
     if ($process.ExitCode -ne 0 -or !(Test-Path -LiteralPath $resultPath) -or (Get-Item -LiteralPath $resultPath).LastWriteTimeUtc -lt $started) {
         Get-ChildItem -LiteralPath $appDirectory -Recurse -Filter '*error.txt' | Where-Object LastWriteTimeUtc -ge $started | ForEach-Object { Get-Content -LiteralPath $_.FullName }
         Get-ChildItem -LiteralPath $appDirectory -Recurse -Filter 'progress.txt' | Where-Object LastWriteTimeUtc -ge $started | ForEach-Object { Get-Content -LiteralPath $_.FullName -Tail 15 }
+        if ($env:GITHUB_ACTIONS -eq 'true') {
+            Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = $started.ToLocalTime(); Id = 1000,1001,1026 } -ErrorAction SilentlyContinue |
+                Where-Object Message -Match 'Lume.exe' | Select-Object -First 3 -ExpandProperty Message | Write-Output
+        }
         throw ($stage.Name + ' 验收失败，退出码：' + $process.ExitCode)
     }
     $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json

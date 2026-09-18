@@ -91,7 +91,7 @@ internal static class FeatureVerification
                 using (var stream = File.Create(Path.Combine(folder, "规则预览.png"))) ruleEncoder.Save(stream);
                 ruleDialog.Close(); ruleOwner.Close();
                 Progress("AI verification"); await AiVerification.RunAsync(folder, checks);
-                Progress("visual verification"); await VisualVerification.RunAsync(checks, interactive);
+                Progress("visual verification"); await VisualVerification.RunAsync(checks, interactive, Progress);
                 await File.WriteAllTextAsync(Path.Combine(folder, "result.json"), JsonSerializer.Serialize(new { passed = true, interactive, checks }, new JsonSerializerOptions { WriteIndented = true }));
             }
             catch (Exception ex) { exit = 1; File.WriteAllText(Path.Combine(folder, "error.txt"), ex.ToString()); }

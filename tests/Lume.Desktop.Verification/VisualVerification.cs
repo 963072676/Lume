@@ -8,9 +8,10 @@ namespace Lume.Desktop;
 
 internal static class VisualVerification
 {
-    public static async Task RunAsync(List<string> checks, bool interactive = true)
+    public static async Task RunAsync(List<string> checks, bool interactive = true, Action<string>? progress = null)
     {
-        void Check(bool ok, string name) { if (!ok) throw new InvalidOperationException(name); checks.Add(name); }
+        void Check(bool ok, string name) { if (!ok) throw new InvalidOperationException(name); checks.Add(name); progress?.Invoke("PASS " + name); }
+        progress?.Invoke("measure menu text");
         var two = new SpacedMenuText { Text = "设置" }; var three = new SpacedMenuText { Text = "收件箱" }; var four = new SpacedMenuText { Text = "智能规则" };
         foreach (var label in new[] { two, three, four }) label.Measure(new Size(500, 40));
         Check(two.DesiredSize.Width == three.DesiredSize.Width && three.DesiredSize.Width == four.DesiredSize.Width && two.Distributed, "两三四字菜单真实字符间距分布后宽度一致");
@@ -35,7 +36,10 @@ internal static class VisualVerification
         Check(ShellIcons.SamePixels(IconArtwork.Normalize(Art(0), false), IconArtwork.Normalize(Art(16), false)), "不同透明留白的图标归一化后实际可见尺寸一致");
         var thumbnail = IconArtwork.Normalize(Art(8), true); Check(thumbnail.PixelWidth == 128 && thumbnail.PixelHeight == 128 && thumbnail.IsFrozen, "媒体缩略图使用统一方形外框且可跨线程");
         foreach (var entry in SystemDesktopWindow.Entries)
+        {
+            progress?.Invoke("read system icon: " + entry.Name);
             Check(SystemDesktopWindow.ReadIcon(entry) is BitmapSource { PixelWidth: 128 }, "读取 Windows 原生图标：" + entry.Name);
+        }
         if (interactive) await CheckButtonStatesAsync(Check);
         else checks.Add("已跳过真实鼠标悬停检查：本次使用 --no-input");
     }
