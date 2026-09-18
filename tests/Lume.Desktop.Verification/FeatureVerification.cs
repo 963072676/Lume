@@ -17,13 +17,15 @@ internal static class FeatureVerification
         var folder = Path.Combine(AppContext.BaseDirectory, "features-verification"); Directory.CreateDirectory(folder);
         var fixture = Path.Combine(folder, "fixtures", Guid.NewGuid().ToString("N")); Directory.CreateDirectory(fixture);
         var checks = new List<string>(); var exit = 0;
+        var progress = Path.Combine(folder, "progress.txt"); File.WriteAllText(progress, "starting\n");
+        void Progress(string message) => File.AppendAllText(progress, message + "\n");
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown }; Ui.InstallStyles(app);
         app.Startup += async (_, _) =>
         {
             FilePreviewWindow? window = null;
             try
             {
-                void Check(bool ok, string name) { if (!ok) throw new InvalidOperationException(name); checks.Add(name); }
+                void Check(bool ok, string name) { if (!ok) throw new InvalidOperationException(name); checks.Add(name); Progress("PASS " + name); }
                 File.WriteAllText(Path.Combine(fixture, "项目计划.txt"), "项目计划\n\n预览、自由调整、对齐线\n原文件保持不变。");
                 using (var bitmap = new System.Drawing.Bitmap(800, 500))
                 {
@@ -45,6 +47,7 @@ internal static class FeatureVerification
                 Check(thumbnail is BitmapSource picture && (brokenThumbnail is not BitmapSource brokenPicture || !ShellIcons.SamePixels(picture, brokenPicture)), "图片文件图标显示内容缩略图且与损坏图片备用图标区分");
                 foreach (var name in new[] { "项目计划.txt", "图片.png", "文档.docx", "表格.xlsx", "演示.pptx", "压缩包.zip", "两页.pdf", "静音.wav", "损坏.png" })
                 {
+                    Progress("preview " + name);
                     var file = files.Single(f => f.Name == name); var original = File.ReadAllBytes(file.Path);
                     window = new(file, false) { WindowStartupLocation = WindowStartupLocation.Manual, Left = -16000, Top = 0, ShowActivated = false };
                     window.Show(); await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
@@ -87,8 +90,8 @@ internal static class FeatureVerification
                 var ruleEncoder = new PngBitmapEncoder(); ruleEncoder.Frames.Add(BitmapFrame.Create(ruleImage));
                 using (var stream = File.Create(Path.Combine(folder, "规则预览.png"))) ruleEncoder.Save(stream);
                 ruleDialog.Close(); ruleOwner.Close();
-                await AiVerification.RunAsync(folder, checks);
-                await VisualVerification.RunAsync(checks, interactive);
+                Progress("AI verification"); await AiVerification.RunAsync(folder, checks);
+                Progress("visual verification"); await VisualVerification.RunAsync(checks, interactive);
                 await File.WriteAllTextAsync(Path.Combine(folder, "result.json"), JsonSerializer.Serialize(new { passed = true, interactive, checks }, new JsonSerializerOptions { WriteIndented = true }));
             }
             catch (Exception ex) { exit = 1; File.WriteAllText(Path.Combine(folder, "error.txt"), ex.ToString()); }

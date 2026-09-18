@@ -27,6 +27,8 @@ jobs:
         with:
           global-json-file: global.json
       - name: 非交互完整验收
+        env:
+          LUME_VERIFY_SOFTWARE_RENDERING: '1'
         run: ./scripts/verify.ps1 -SkipInteractive
       - name: 性能回归
         run: ./scripts/benchmark.ps1

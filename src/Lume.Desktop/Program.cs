@@ -15,6 +15,8 @@ public static class Program
         catch (Exception ex) { MessageBox.Show(ex.Message, "Lume 启动环境修复失败"); return 1; }
         if (args.FirstOrDefault() == "--guard") return DesktopRecovery.Guard(args);
 #if VERIFICATION
+        if (Environment.GetEnvironmentVariable("LUME_VERIFY_SOFTWARE_RENDERING") == "1")
+            System.Windows.Media.RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
         if (args.Contains("--performance-self-test")) return MainWindow.RunPerformanceVerification(args);
         if (args.Contains("--menu-self-test")) return DesktopMenuVerification.Run();
         if (args.Contains("--icons-self-test")) return IconVerification.Run();
