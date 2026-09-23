@@ -99,7 +99,7 @@ internal sealed class DesktopSurface : IDisposable
         if (paused || disposed || view == IntPtr.Zero) return;
         var entries = SystemDesktopWindow.EnabledEntries();
         var signature = organizer.State.Desktop.ShowSystemEntries + string.Join("|", entries.Select(e => e.Id));
-        if (systemSignature == signature) { systemEntries?.RefreshPlacement(); return; }
+        if (systemSignature == signature) { systemEntries?.RefreshPlacement(); systemEntries?.RefreshDynamicIcons(); return; }
         systemEntries?.Close(); systemEntries = null; systemSignature = signature;
         if (!organizer.State.Desktop.ShowSystemEntries || entries.Count == 0) return;
        var context = DesktopNative.SetThreadDpiAwarenessContext(DesktopNative.GetWindowDpiAwarenessContext(view));

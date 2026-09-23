@@ -4,7 +4,7 @@ public sealed record DesktopFile(string Path, string Name, string Extension, lon
     DateTime CreatedUtc, DateTime ModifiedUtc, bool IsDirectory, string Source, ShortcutTarget? Target = null);
 
 public sealed record ShortcutTarget(string Path, string Name, string Extension, string Kind,
-    long? Size = null, string Description = "", string Product = "", string Company = "", string Arguments = "", string WorkingDirectory = "");
+    long? Size = null, string Description = "", string Product = "", string Company = "", string Arguments = "", string WorkingDirectory = "", string IconLocation = "");
 
 public sealed record Collection(string Id, string Name, string Color, bool InWork = true, bool InPresentation = false, string? MappedPath = null, bool Recent = false);
 public sealed record CardOptions(bool Locked = false, bool Collapsed = false, string Sort = "name", bool Descending = false, int IconSize = 34, List<string>? Order = null);

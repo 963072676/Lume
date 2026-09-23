@@ -25,15 +25,20 @@ internal static class ShellIcons
     [DllImport("user32.dll")] private static extern bool DestroyIcon(IntPtr icon);
     [DllImport("ole32.dll")] private static extern int OleInitialize(IntPtr reserved);
     [DllImport("ole32.dll")] private static extern void OleUninitialize();
-    private sealed record Entry(Task<ImageSource> Task, DateTime Created);
+    private sealed record Entry(DesktopFile File, string? IconPath, Task<ImageSource> Task, DateTime Created);
     private sealed record Request(DesktopFile File, TaskCompletionSource<ImageSource> Completion);
+    internal sealed record SystemIconResult(ImageSource Icon, long? Count);
+    private sealed record SystemRequest(SystemDesktopWindow.Entry Entry, TaskCompletionSource<SystemIconResult> Completion);
     private static readonly object Gate = new();
     private static readonly Dictionary<string, Entry> Cache = new(StringComparer.OrdinalIgnoreCase);
     private static readonly BlockingCollection<Request> Queue = new(256);
+    private static readonly BlockingCollection<SystemRequest> SystemQueue = new(32);
     private static readonly ConcurrentDictionary<string, BitmapSource> TypeIcons = new(StringComparer.OrdinalIgnoreCase);
     private static readonly ImageSource AppFallback = DrawFallback(true, false);
     private static readonly ImageSource FileFallback = DrawFallback(false, false);
     private static readonly ImageSource FolderFallback = DrawFallback(false, true);
+    private static int associationGeneration;
+    internal static event Action<string?>? Invalidated;
     static ShellIcons()
     {
         // Shell 图标读取在有限数量的后台 STA 中执行，不阻塞抽屉交互。
@@ -42,6 +47,8 @@ internal static class ShellIcons
             var worker = new Thread(Work) { IsBackground = true, Name = "Lume 图标加载 " + i };
             worker.SetApartmentState(ApartmentState.STA); worker.Start();
         }
+        var systemWorker = new Thread(SystemWork) { IsBackground = true, Name = "Lume 系统图标加载" };
+        systemWorker.SetApartmentState(ApartmentState.STA); systemWorker.Start();
     }
     internal static bool HasIndividualIcon(DesktopFile file) => !file.IsDirectory &&
         (FilePresentation.IsShortcut(file) || MediaThumbnails.Supports(file) || file.Extension.Equals(".exe", StringComparison.OrdinalIgnoreCase) || file.Extension.Equals(".ico", StringComparison.OrdinalIgnoreCase));
@@ -59,21 +66,90 @@ internal static class ShellIcons
                 foreach (var old in Cache.Where(p => p.Value.Task.IsCompleted).OrderBy(p => p.Value.Created).Take(128).Select(p => p.Key).ToArray()) Cache.Remove(old);
             var completion = new TaskCompletionSource<ImageSource>(TaskCreationOptions.RunContinuationsAsynchronously);
             if (!Queue.TryAdd(new(file, completion))) return Task.FromResult(Fallback(file));
-            Cache[key] = new(completion.Task, now); return completion.Task;
+            Cache[key] = new(file, IconResourcePath(file), completion.Task, now); return completion.Task;
+        }
+    }
+    internal static Task<SystemIconResult> GetSystemAsync(SystemDesktopWindow.Entry entry)
+    {
+        var completion = new TaskCompletionSource<SystemIconResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        return SystemQueue.TryAdd(new(entry, completion)) ? completion.Task : Task.FromResult(new SystemIconResult(SystemDesktopWindow.FallbackIcon, null));
+    }
+    private static bool Affected(DesktopFile file, string? iconPath, string path)
+    {
+        if (path.Equals(file.Path, StringComparison.OrdinalIgnoreCase)
+            || path.Equals(file.Target?.Path, StringComparison.OrdinalIgnoreCase)
+            || path.Equals(iconPath, StringComparison.OrdinalIgnoreCase)) return true;
+        return path.Equals(System.IO.Path.GetDirectoryName(file.Path), StringComparison.OrdinalIgnoreCase)
+            || (iconPath != null && path.Equals(System.IO.Path.GetDirectoryName(iconPath), StringComparison.OrdinalIgnoreCase))
+            || (file.Target is { Path: var target } && System.IO.Path.IsPathFullyQualified(target)
+                && path.Equals(System.IO.Path.GetDirectoryName(target), StringComparison.OrdinalIgnoreCase));
+    }
+    private static string? IconResourcePath(DesktopFile file)
+    {
+        var location = file.Target?.IconLocation;
+        if (string.IsNullOrWhiteSpace(location)) return null;
+        var separator = location.LastIndexOf(',');
+        if (separator >= 0 && int.TryParse(location[(separator + 1)..].Trim(), out _)) location = location[..separator];
+        var path = Environment.ExpandEnvironmentVariables(location.Trim().Trim('"'));
+        if (path.Length == 0 || path[0] == '@') return null;
+        try { return System.IO.Path.GetFullPath(path, System.IO.Path.GetDirectoryName(file.Path)!); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or System.IO.PathTooLongException) { return null; }
+    }
+    internal static void OnShellChange(ShellIconChange change)
+    {
+        if ((change.EventId & (ShellIconChanges.AssociationChanged | ShellIconChanges.ImageChanged)) != 0)
+        {
+            Interlocked.Increment(ref associationGeneration);
+            lock (Gate) Cache.Clear();
+            TypeIcons.Clear();
+            Invalidated?.Invoke(null);
+        }
+        else if (!string.IsNullOrEmpty(change.Path) || !string.IsNullOrEmpty(change.NewPath))
+        {
+            lock (Gate)
+                foreach (var key in Cache.Where(pair =>
+                    (!string.IsNullOrEmpty(change.Path) && Affected(pair.Value.File, pair.Value.IconPath, change.Path)) ||
+                    (!string.IsNullOrEmpty(change.NewPath) && Affected(pair.Value.File, pair.Value.IconPath, change.NewPath))).Select(pair => pair.Key).ToArray()) Cache.Remove(key);
+            if (!string.IsNullOrEmpty(change.Path)) Invalidated?.Invoke(change.Path);
+            if (!string.IsNullOrEmpty(change.NewPath)) Invalidated?.Invoke(change.NewPath);
         }
     }
     public static Image CreateImage(DesktopFile file)
     {
         var image = new Image { Source = Fallback(file), Width = 34, Height = 34, Margin = new(0, 2, 0, 4), Stretch = Stretch.Uniform };
         RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
-        image.Loaded += Load;
-        async void Load(object sender, RoutedEventArgs args)
+        var iconPath = IconResourcePath(file);
+        var version = 0; var subscribed = false;
+        image.Loaded += (_, _) =>
         {
-            image.Loaded -= Load;
+            if (!subscribed) { Invalidated += OnInvalidated; subscribed = true; }
+            Refresh();
+        };
+        image.Unloaded += (_, _) => { if (subscribed) { Invalidated -= OnInvalidated; subscribed = false; } version++; };
+        void OnInvalidated(string? path) { if (path == null || Affected(file, iconPath, path)) Refresh(); }
+        void Refresh() { var requested = ++version; _ = LoadAsync(requested); }
+        async Task LoadAsync(int requested)
+        {
             var source = await GetAsync(file);
-            if (!image.Dispatcher.HasShutdownStarted) await image.Dispatcher.InvokeAsync(() => image.Source = source);
+            if (!image.Dispatcher.HasShutdownStarted)
+                await image.Dispatcher.InvokeAsync(() => { if (requested == version) image.Source = source; });
         }
         return image;
+    }
+    private static void SystemWork()
+    {
+        var initialized = OleInitialize(IntPtr.Zero) >= 0;
+        try
+        {
+            foreach (var request in SystemQueue.GetConsumingEnumerable())
+            {
+                SystemIconResult icon;
+                try { icon = initialized ? SystemDesktopWindow.ReadSystemIcon(request.Entry) : new(SystemDesktopWindow.FallbackIcon, null); }
+                catch (Exception) { icon = new(SystemDesktopWindow.FallbackIcon, null); }
+                request.Completion.TrySetResult(icon);
+            }
+        }
+        finally { if (initialized) OleUninitialize(); }
     }
     private static void Work()
     {
@@ -97,13 +173,14 @@ internal static class ShellIcons
             try { if (MediaThumbnails.Read(file) is { } thumbnail) return thumbnail; } catch (Exception) { }
         }
         var typeKey = file.IsDirectory ? "<directory>" : file.Extension;
+        var generation = Volatile.Read(ref associationGeneration);
         if (!TypeIcons.TryGetValue(typeKey, out var generic))
         {
             generic = Read(file.IsDirectory ? "folder" : "file" + file.Extension, file.IsDirectory ? 0x10u : 0x80u, true);
             if (generic != null)
             {
                 if (TypeIcons.Count >= 256) TypeIcons.Clear();
-                TypeIcons.TryAdd(typeKey, generic);
+                if (generation == Volatile.Read(ref associationGeneration)) TypeIcons.TryAdd(typeKey, generic);
             }
         }
         if (!HasIndividualIcon(file)) return generic ?? Fallback(file);

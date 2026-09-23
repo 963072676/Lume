@@ -33,6 +33,8 @@ internal static class IconVerification
                 Shortcut(red, redIcon); Shortcut(blue, blueIcon);
                 var files = DesktopScanner.Scan([first, second]).Files;
                 var a = files.Single(f => f.Path == red); var b = files.Single(f => f.Path == blue);
+                Check(a.Target?.IconLocation.Contains(redIcon, StringComparison.OrdinalIgnoreCase) == true,
+                    "快捷方式读取自定义图标资源位置");
                 var originalHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(red)));
                 var originalBlue = File.ReadAllBytes(blue);
                 Check(FilePresentation.DisplayName(a) == "同名 应用", "快捷方式显示名称隐藏 .lnk");
@@ -47,6 +49,9 @@ internal static class IconVerification
                 Check(icons.All(i => i is BitmapSource), "两个快捷方式读出实际图标");
                 Check(!ShellIcons.SamePixels((BitmapSource)icons[0], (BitmapSource)icons[1]), "同名同后缀快捷方式图标不会串用");
                 Check(icons.All(i => i.IsFrozen), "图标可安全跨线程使用");
+                var iconResourceCache = ShellIcons.GetAsync(a);
+                ShellIcons.OnShellChange(new ShellIconChange(0x00002000, redIcon));
+                Check(!ReferenceEquals(iconResourceCache, ShellIcons.GetAsync(a)), "图标资源变化使相关快捷方式缓存失效");
                 Check(originalHash == Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(red))), "读取图标没有改变快捷方式内容");
                 Shortcut(red, blueIcon); File.SetLastWriteTimeUtc(red, DateTime.UtcNow.AddSeconds(2));
                 var changed = DesktopScanner.Scan([first]).Files.Single();
@@ -56,6 +61,7 @@ internal static class IconVerification
                 var missing = a with { Path = Path.Combine(fixture, "不存在.lnk") };
                 Check(await ShellIcons.GetAsync(missing).WaitAsync(TimeSpan.FromSeconds(10)) != null, "失效路径仍有备用图标");
                 await ShellIcons.GetAsync(b); Check(originalBlue.AsSpan().SequenceEqual(File.ReadAllBytes(blue)), "重复读取不改变快捷方式内容");
+                await SystemIconVerification.RunAsync(fixture, Check);
 
                 var store = new StateStore(Path.Combine(fixture, "state.json")); var organizer = new Organizer(store, AppState.Create([first, second]));
                 window = new MainWindow(organizer, store, true, false);
@@ -63,6 +69,9 @@ internal static class IconVerification
                 var image = (Image)tileBody.Children[0]; image.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent));
                 await Dispatcher.Yield(DispatcherPriority.Background);
                 Check(ReferenceEquals(image.Source, icons[1]), "真实文件卡片异步更新为应用图标");
+                var cached = ShellIcons.GetAsync(a);
+                ShellIcons.OnShellChange(new ShellIconChange(0x00000001, a.Path, blue));
+                Check(!ReferenceEquals(cached, ShellIcons.GetAsync(a)), "快捷方式更名或目标更新使旧图标缓存失效");
                 Check(((TextBlock)tileBody.Children[1]).Text == "同名 应用" && tile.ToolTip.ToString()!.Contains(blue), "卡片使用简洁名称，提示保留真实路径");
                 Check(tile.ContextMenu != null && window.FileMenu(b, new TileSelection()).Items.OfType<MenuItem>().Any(i => i.Header as string == "移入回收站"), "文件卡片按需创建菜单并提供回收站删除入口");
                 var actual = DesktopScanner.Scan([Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory)]).Files.Where(FilePresentation.IsShortcut).ToList();

@@ -19,6 +19,7 @@ public sealed partial class MainWindow : Window
     private readonly Organizer organizer;
     private readonly StateStore store;
     private readonly RuntimeDiagnostics? diagnostics;
+    private readonly ShellIconChanges shellIconChanges;
     private readonly bool demo;
     private readonly bool smoke;
     private readonly ContentControl content = new();
@@ -69,6 +70,7 @@ public sealed partial class MainWindow : Window
     public MainWindow(Organizer organizer, StateStore store, bool demo, bool smoke, RuntimeDiagnostics? diagnostics = null)
     {
         this.organizer = organizer; this.store = store; this.demo = demo; this.smoke = smoke; this.diagnostics = diagnostics;
+        shellIconChanges = new ShellIconChanges();
         Style = (Style)Application.Current.FindResource(typeof(Window));
         Title = "Lume · 桌面整理" + (demo ? " — 隔离演示" : "");
         Width = 1000; Height = 720; MinWidth = 840; MinHeight = 580;
@@ -111,7 +113,7 @@ public sealed partial class MainWindow : Window
 #endif
         };
         Closing += (_, e) => { if (Resident && !Exiting) { e.Cancel = true; Hide(); } };
-        Closed += (_, _) => { closed = true; preview?.Close(); periodic.Stop(); debounce.Stop(); foreach (var watcher in watchers) watcher.Dispose(); };
+        Closed += (_, _) => { closed = true; shellIconChanges.Dispose(); preview?.Close(); periodic.Stop(); debounce.Stop(); foreach (var watcher in watchers) watcher.Dispose(); };
     }
     public async Task StartMonitoringAsync() { if (monitoringStarted) return; monitoringStarted = true; await RefreshAsync(); periodic.Start(); }
     public void ShowSettings() { Render(); Show(); WindowState = WindowState.Normal; Activate(); }

@@ -30,14 +30,18 @@ public static class ShortcutReader
             link = ((dynamic)shell).CreateShortcut(path);
             string target = ((dynamic)link).TargetPath;
             if (string.IsNullOrWhiteSpace(target)) return null;
+            string iconLocation;
+            try { iconLocation = ((dynamic)link).IconLocation ?? ""; }
+            catch (Exception ex) when (ex is COMException or Microsoft.CSharp.RuntimeBinder.RuntimeBinderException) { iconLocation = ""; }
             target = Environment.ExpandEnvironmentVariables(target);
             if (!Path.IsPathFullyQualified(target) && Uri.TryCreate(target, UriKind.Absolute, out var uri) && !uri.IsFile)
-                return new(target, uri.Host, "", "url");
+                return new(target, uri.Host, "", "url", IconLocation: iconLocation);
             if (Uri.TryCreate(target, UriKind.Absolute, out var fileUri) && fileUri.IsFile) target = fileUri.LocalPath;
             var name = Path.GetFileName(target.TrimEnd('\\', '/'));
             var result = new ShortcutTarget(target, name, Path.GetExtension(name).ToLowerInvariant(), "unknown",
                 Arguments: info.Extension.Equals(".lnk", StringComparison.OrdinalIgnoreCase) ? (string)((dynamic)link).Arguments : "",
-                WorkingDirectory: info.Extension.Equals(".lnk", StringComparison.OrdinalIgnoreCase) ? (string)((dynamic)link).WorkingDirectory : "");
+                WorkingDirectory: info.Extension.Equals(".lnk", StringComparison.OrdinalIgnoreCase) ? (string)((dynamic)link).WorkingDirectory : "",
+                IconLocation: iconLocation);
             // A network or cloud target must not cause network access / hydration during a scan.
             if (!Path.IsPathFullyQualified(target) || target.StartsWith(@"\\", StringComparison.Ordinal)) return result;
             var targetInfo = new FileInfo(target);

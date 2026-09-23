@@ -61,7 +61,7 @@ API Key 使用 Windows 当前用户加密；AI 默认发送文件名称、应用
 
 ## 参与项目
 
-欢迎通过 [Issues](https://github.com/963072676/Lume/issues) 提交问题或建议，修改前可阅读 [贡献指南](CONTRIBUTING.md)、[架构与贡献任务](docs/架构与贡献任务.md)和[性能复测](docs/性能复测.md)。
+欢迎通过 [Issues](https://github.com/963072676/Lume/issues) 提交问题或建议，修改前可阅读 [贡献指南](CONTRIBUTING.md)、[架构与贡献任务](docs/架构与贡献任务.md)、[图标状态与缺口规划](docs/图标状态与缺口规划.md)和[性能复测](docs/性能复测.md)。
 安全问题请按 [安全说明](SECURITY.md) 私下报告。
 
 代码采用 [MIT 许可证](LICENSE)。
