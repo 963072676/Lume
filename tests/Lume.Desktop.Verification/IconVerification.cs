@@ -33,8 +33,6 @@ internal static class IconVerification
                 Shortcut(red, redIcon); Shortcut(blue, blueIcon);
                 var files = DesktopScanner.Scan([first, second]).Files;
                 var a = files.Single(f => f.Path == red); var b = files.Single(f => f.Path == blue);
-                Check(a.Target?.IconLocation.Contains(redIcon, StringComparison.OrdinalIgnoreCase) == true,
-                    "快捷方式读取自定义图标资源位置");
                 var originalHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(red)));
                 var originalBlue = File.ReadAllBytes(blue);
                 Check(FilePresentation.DisplayName(a) == "同名 应用", "快捷方式显示名称隐藏 .lnk");
@@ -52,6 +50,13 @@ internal static class IconVerification
                 var iconResourceCache = ShellIcons.GetAsync(a);
                 ShellIcons.OnShellChange(new ShellIconChange(0x00002000, redIcon));
                 Check(!ReferenceEquals(iconResourceCache, ShellIcons.GetAsync(a)), "图标资源变化使相关快捷方式缓存失效");
+                var libraryIcon = Path.Combine(fixture, "custom-icon.dll");
+                var explicitTarget = (a.Target ?? new ShortcutTarget(Environment.ProcessPath!, "Lume.exe", ".exe", "file")) with { IconLocation = libraryIcon + ",0" };
+                var explicitFile = a with { Target = explicitTarget };
+                ShellIcons.OnShellChange(new ShellIconChange(0x00002000, a.Path));
+                var explicitCache = ShellIcons.GetAsync(explicitFile);
+                ShellIcons.OnShellChange(new ShellIconChange(0x00002000, libraryIcon));
+                Check(!ReferenceEquals(explicitCache, ShellIcons.GetAsync(explicitFile)), "自定义 DLL 图标位置独立于快捷方式目标失效");
                 Check(originalHash == Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(red))), "读取图标没有改变快捷方式内容");
                 Shortcut(red, blueIcon); File.SetLastWriteTimeUtc(red, DateTime.UtcNow.AddSeconds(2));
                 var changed = DesktopScanner.Scan([first]).Files.Single();
@@ -63,12 +68,13 @@ internal static class IconVerification
                 await ShellIcons.GetAsync(b); Check(originalBlue.AsSpan().SequenceEqual(File.ReadAllBytes(blue)), "重复读取不改变快捷方式内容");
                 await SystemIconVerification.RunAsync(fixture, Check);
 
+                var currentBlueIcon = await ShellIcons.GetAsync(b);
                 var store = new StateStore(Path.Combine(fixture, "state.json")); var organizer = new Organizer(store, AppState.Create([first, second]));
                 window = new MainWindow(organizer, store, true, false);
                 var tile = (Button)window.BuildFileTile(b); var tileBody = (StackPanel)tile.Content;
                 var image = (Image)tileBody.Children[0]; image.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent));
                 await Dispatcher.Yield(DispatcherPriority.Background);
-                Check(ReferenceEquals(image.Source, icons[1]), "真实文件卡片异步更新为应用图标");
+                Check(ReferenceEquals(image.Source, currentBlueIcon), "真实文件卡片异步更新为应用图标");
                 var cached = ShellIcons.GetAsync(a);
                 ShellIcons.OnShellChange(new ShellIconChange(0x00000001, a.Path, blue));
                 Check(!ReferenceEquals(cached, ShellIcons.GetAsync(a)), "快捷方式更名或目标更新使旧图标缓存失效");

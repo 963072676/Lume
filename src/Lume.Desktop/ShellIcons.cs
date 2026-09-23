@@ -79,6 +79,8 @@ internal static class ShellIcons
         if (path.Equals(file.Path, StringComparison.OrdinalIgnoreCase)
             || path.Equals(file.Target?.Path, StringComparison.OrdinalIgnoreCase)
             || path.Equals(iconPath, StringComparison.OrdinalIgnoreCase)) return true;
+        // Some Shell providers omit IconLocation. A changed standalone .ico can still back a shortcut.
+        if (FilePresentation.IsShortcut(file) && path.EndsWith(".ico", StringComparison.OrdinalIgnoreCase)) return true;
         return path.Equals(System.IO.Path.GetDirectoryName(file.Path), StringComparison.OrdinalIgnoreCase)
             || (iconPath != null && path.Equals(System.IO.Path.GetDirectoryName(iconPath), StringComparison.OrdinalIgnoreCase))
             || (file.Target is { Path: var target } && System.IO.Path.IsPathFullyQualified(target)
