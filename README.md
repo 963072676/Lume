@@ -12,17 +12,17 @@
 
 ## 下载与运行
 
-稳定版为 [0.1.0](https://github.com/963072676/Lume/releases/tag/v0.1.0)。新功能和性能优化可下载 **[0.2.0-beta.1 预览版](https://github.com/963072676/Lume/releases/tag/v0.2.0-beta.1)**，升级前请先阅读[升级与回退](docs/升级与回退.md)。以下功能说明对应预览版源码。
+稳定版为 [0.1.0](https://github.com/963072676/Lume/releases/tag/v0.1.0)。图标状态修复和性能优化可下载 **[0.2.0-beta.2 预览版](https://github.com/963072676/Lume/releases/tag/v0.2.0-beta.2)**，升级前请先阅读[升级与回退](docs/升级与回退.md)。以下功能说明对应预览版源码。
 
 | 下载包 | 适用情况 |
 | --- | --- |
-| `Lume-0.2.0-beta.1-win-x64.zip` | 完整便携版，自带运行环境，解压即用 |
-| `Lume-0.2.0-beta.1-win-x64-lite.zip` | 精简版，需要 .NET 10 Windows Desktop Runtime x64 |
+| `Lume-0.2.0-beta.2-win-x64.zip` | 完整便携版，自带运行环境，解压即用 |
+| `Lume-0.2.0-beta.2-win-x64-lite.zip` | 精简版，需要 .NET 10 Windows Desktop Runtime x64 |
 
 适用于 Windows 10 2004 及以上、Windows 11，x64。解压后运行 `Lume.exe`，保留同目录的 DLL 和 `shell-extension.txt`。
 程序默认显示桌面分区并驻留托盘，双击托盘图标打开管理窗口；关闭窗口继续运行，托盘退出恢复 Windows 原桌面。请保留 `Lume.Guard.exe`，它负责异常退出后的桌面恢复。
 
-预览版的真实休眠、多屏和 Explorer 重启验收尚未完成，环境边界及故障处理见[支持与已知问题](docs/支持与已知问题.md)。上方截图来自 0.1.0，不代表全部新主题。
+预览版的回收站实物清空、真实休眠、多屏和 Explorer 重启验收尚未完成，环境边界及故障处理见[支持与已知问题](docs/支持与已知问题.md)。上方截图来自 0.1.0，不代表全部新主题。
 
 ## 可以做什么
 
