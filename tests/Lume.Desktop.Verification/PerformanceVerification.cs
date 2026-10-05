@@ -20,7 +20,7 @@ public sealed partial class MainWindow
         using var diagnostics = new RuntimeDiagnostics(Path.Combine(folder, "diagnostics"));
         var store = new StateStore(Path.Combine(folder, "state.json")); var organizer = new Organizer(store, AppState.Create([fixture]));
         var window = new MainWindow(organizer, store, true, false, diagnostics)
-            { Left = -16000, Top = 0, WindowStartupLocation = WindowStartupLocation.Manual, ShowActivated = false };
+            { Left = -16000, Top = 0, WindowStartupLocation = WindowStartupLocation.Manual, ShowActivated = false, ShowInTaskbar = false };
         var checks = new List<string>(); var exit = 0; var activeSeconds = 0d; var gaps = 0; var iterations = 0;
         void Result(bool passed, string? error = null) => File.WriteAllText(Path.Combine(folder, "result.json"), JsonSerializer.Serialize(new { passed, checks, error, minutes, activeSeconds, gaps, iterations }, new JsonSerializerOptions { WriteIndented = true }));
         app.Startup += async (_, _) =>
@@ -96,6 +96,11 @@ public sealed partial class MainWindow
                     activeSeconds += Math.Min(30, interval);
                     var end = now.AddSeconds(Math.Max(0, minutes * 60 - activeSeconds));
                     using var process = Process.GetCurrentProcess();
+                    var sample = new { pid = Environment.ProcessId, utc = now, iterations, activeSeconds, gaps,
+                        files = organizer.Files.Count, privateBytes = process.PrivateMemorySize64, workingSetBytes = process.WorkingSet64,
+                        handles = process.HandleCount, cpuMs = process.TotalProcessorTime.TotalMilliseconds,
+                        managedBytes = GC.GetTotalMemory(false), gen0 = GC.CollectionCount(0), gen1 = GC.CollectionCount(1), gen2 = GC.CollectionCount(2) };
+                    File.AppendAllText(Path.Combine(folder, "resources.jsonl"), JsonSerializer.Serialize(sample) + "\n");
                     File.WriteAllText(Path.Combine(folder, "progress.json"), JsonSerializer.Serialize(new { pid = Environment.ProcessId, started, utc = now, end, iterations, activeSeconds, gaps,
                         files = organizer.Files.Count, privateBytes = process.PrivateMemorySize64, handles = process.HandleCount, notifications, state = "running" }));
                     if (activeSeconds >= minutes * 60) break;
