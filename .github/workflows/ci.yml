@@ -63,12 +63,19 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/download-artifact@v8.0.1
         with:
           name: Lume-win-x64
           path: release-assets
+      - name: 生成发布包来源证明
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: release-assets/*.zip
+          create-storage-record: false
       - name: 发布已验证版本
         shell: pwsh
         env:
