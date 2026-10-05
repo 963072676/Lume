@@ -102,8 +102,10 @@ internal static class ShellWorkerVerification
                 await Task.Delay(200); current = await client.SendAsync(new("echo"));
                 Check(current is { Ok: true }, "异常退出后可以重新建立连接");
                 var idlePid = current!.Pid;
-                await Until(() => !Alive(idlePid), TimeSpan.FromSeconds(4));
-                Check(client.WorkerPid == null, "空闲工作进程自动退出并释放占用");
+                var idleClock = Stopwatch.StartNew();
+                await Until(() => !Alive(idlePid) && client.WorkerPid == null, TimeSpan.FromSeconds(4));
+                measurements["idleExitMs"] = idleClock.Elapsed.TotalMilliseconds;
+                Check(!Alive(idlePid) && client.WorkerPid == null, "空闲工作进程自动退出并释放占用");
                 current = await client.SendAsync(new("echo"));
                 Check(current is { Ok: true } && current.Pid != idlePid, "空闲退出后按需重新创建工作进程");
                 var disposePid = current!.Pid;
@@ -143,7 +145,7 @@ internal static class ShellWorkerVerification
             }
             catch (Exception ex)
             {
-                exit = 1; var json = JsonSerializer.Serialize(new { passed = false, checks, error = ex.ToString() }, new JsonSerializerOptions { WriteIndented = true });
+                exit = 1; var json = JsonSerializer.Serialize(new { passed = false, checks, measurements, error = ex.ToString() }, new JsonSerializerOptions { WriteIndented = true });
                 File.WriteAllText(Path.Combine(fixture, "error.txt"), ex.ToString()); File.WriteAllText(Path.Combine(root, "latest-result.json"), json);
             }
             finally { timer.Stop(); if (window != null) { window.Exiting = true; window.Close(); } app.Shutdown(); }
