@@ -22,7 +22,8 @@ public sealed partial class MainWindow
         var window = new MainWindow(organizer, store, true, false, diagnostics)
             { Left = -16000, Top = 0, WindowStartupLocation = WindowStartupLocation.Manual, ShowActivated = false, ShowInTaskbar = false };
         var checks = new List<string>(); var exit = 0; var activeSeconds = 0d; var gaps = 0; var iterations = 0;
-        void Result(bool passed, string? error = null) => File.WriteAllText(Path.Combine(folder, "result.json"), JsonSerializer.Serialize(new { passed, checks, error, minutes, activeSeconds, gaps, iterations }, new JsonSerializerOptions { WriteIndented = true }));
+        void Result(bool passed, string? error = null) => File.WriteAllText(Path.Combine(folder, "result.json"), JsonSerializer.Serialize(new { passed, checks, error, minutes, activeSeconds, gaps, iterations,
+            pid = Environment.ProcessId, version = RuntimeIdentity.Version, commit = RuntimeIdentity.Commit }, new JsonSerializerOptions { WriteIndented = true }));
         app.Startup += async (_, _) =>
         {
             try
@@ -40,10 +41,12 @@ public sealed partial class MainWindow
                 File.SetAttributes(firstFile, FileAttributes.Normal); await Until(() => organizer.Files.Count == 1 && !window.refreshing);
                 Check(organizer.Files.Count == 1, "取消隐藏属性后文件实时恢复");
                 var beforeSearch = window.content.Content;
+                var firstTile = window.boardTiles.Values.Single().Tile;
                 window.search.Text = "missing"; window.search.Text = "first"; window.search.Text = "txt";
                 Check(ReferenceEquals(beforeSearch, window.content.Content), "连续搜索输入延迟合并而不逐次重建页面");
                 await Until(() => !ReferenceEquals(beforeSearch, window.content.Content));
                 Check(window.boardSelection.Model.Visible.Count == 1, "合并搜索采用最后一次输入");
+                Check(ReferenceEquals(firstTile, window.boardTiles.Values.Single().Tile), "同一文件搜索刷新复用已有控件");
                 window.search.Clear(); await Until(() => !window.searchDelay.IsEnabled);
                 using (var command = new AutoResetEvent(false))
                 {
@@ -71,6 +74,14 @@ public sealed partial class MainWindow
                 await Task.Run(() => { for (var i = 0; i < 1000; i++) File.WriteAllText(Path.Combine(fixture, $"storm-{i:D4}.txt"), "fixture"); });
                 await Until(() => organizer.Files.Count == 1001 && !window.refreshing);
                 Check(window.boardSelection.Model.Visible.Count <= 80, "真实文件事件风暴收敛且分页可见项不超过80");
+                var previousTiles = window.boardTiles.ToDictionary(p => p.Key, p => p.Value.Tile, StringComparer.OrdinalIgnoreCase);
+                var selectedPath = window.boardSelection.Model.Visible.First(); window.boardSelection.Model.Select(selectedPath);
+                window.search.Text = "txt"; await Until(() => !window.searchDelay.IsEnabled);
+                Check(window.boardTiles.Count <= 80 && window.boardTiles.All(p => ReferenceEquals(p.Value.Tile, previousTiles[p.Key])), "千项目录重复搜索只保留本页控件并复用80项");
+                Check(window.boardSelection.Model.Selected.Contains(selectedPath), "控件复用保持仍可见文件的选择状态");
+                window.search.Text = "no-match"; await Until(() => !window.searchDelay.IsEnabled);
+                Check(window.boardTiles.Count == 0 && window.boardSelection.Model.Selected.Count == 0, "空搜索结果释放控件并清除不可见选择");
+                window.search.Clear(); await Until(() => !window.searchDelay.IsEnabled);
                 await Task.Delay(700); await Until(() => !window.refreshing);
                 var baseline = notifications; var history = organizer.State.History.Count;
                 await window.RefreshAsync(false);

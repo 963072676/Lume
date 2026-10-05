@@ -49,7 +49,7 @@ internal static class FeatureVerification
                 {
                     Progress("preview " + name);
                     var file = files.Single(f => f.Name == name); var original = File.ReadAllBytes(file.Path);
-                    window = new(file, false) { WindowStartupLocation = WindowStartupLocation.Manual, Left = -16000, Top = 0, ShowActivated = false };
+                    window = new(file, false) { WindowStartupLocation = WindowStartupLocation.Manual, Left = -16000, Top = 0, ShowActivated = false, ShowInTaskbar = false };
                     window.Show(); await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
                     await (window.Loading ?? throw new Exception("预览未开始加载")).WaitAsync(TimeSpan.FromSeconds(20));
                     window.UpdateLayout();
@@ -69,14 +69,14 @@ internal static class FeatureVerification
                     var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(image)); using (var stream = File.Create(Path.Combine(folder, name + ".png"))) encoder.Save(stream);
                     window.Close(); window = null; Check(original.SequenceEqual(File.ReadAllBytes(file.Path)), name + " 预览没有改写文件");
                 }
-                var pending = new FilePreviewWindow(files.First(), false) { WindowStartupLocation = WindowStartupLocation.Manual, Left = -16000, ShowActivated = false }; pending.Show(); pending.Close(); if (pending.Loading != null) await pending.Loading;
+                var pending = new FilePreviewWindow(files.First(), false) { WindowStartupLocation = WindowStartupLocation.Manual, Left = -16000, ShowActivated = false, ShowInTaskbar = false }; pending.Show(); pending.Close(); if (pending.Loading != null) await pending.Loading;
                 checks.Add("加载中关闭预览不会重新打开窗口");
                 var ruleOrganizer = new Organizer(new StateStore(Path.Combine(fixture, "rules-state.json")), AppState.Create([]));
                 ruleOrganizer.ApplyScan(new([new DesktopFile(Path.Combine(fixture, "音乐.lnk"), "音乐.lnk", ".lnk", 10, DateTime.UtcNow, DateTime.UtcNow, false, "未知来源",
                     new ShortcutTarget(@"D:\Games\Player.exe", "Player.exe", ".exe", "file"))], []));
-                var ruleOwner = new Window { Left = -16000, ShowActivated = false }; ruleOwner.Show();
+                var ruleOwner = new Window { Left = -16000, ShowActivated = false, ShowInTaskbar = false }; ruleOwner.Show();
                 var ruleDialog = new RuleDialog(ruleOwner, ruleOrganizer, new Rule("preview", "影音规则", "work", [new Lume.Core.Condition("name", "contains", "音乐,视频,剧,音")]))
-                    { WindowStartupLocation = WindowStartupLocation.Manual, Left = -16000, Top = 0, ShowActivated = false };
+                    { WindowStartupLocation = WindowStartupLocation.Manual, Left = -16000, Top = 0, ShowActivated = false, ShowInTaskbar = false };
                 ruleDialog.Show(); ruleDialog.UpdateLayout();
                 Find<Button>(ruleDialog).Single(b => b.Content as string == "预览匹配").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 for (var i = 0; i < 200 && !Find<TextBlock>(ruleDialog).Any(t => t.Text.Contains("条件命中 1 项 · 本规则生效 1 项")); i++) await Task.Delay(25);

@@ -45,6 +45,7 @@ public sealed class HistoryEntry
     public string Detail { get; set; } = "";
     public Configuration? PreviousConfiguration { get; set; }
     public List<AssignmentChange> Changes { get; set; } = [];
+    public Dictionary<string, string>? RemovedAssignments { get; set; }
     public bool Undone { get; set; }
 }
 
@@ -53,6 +54,7 @@ public sealed class AppState
     public int Version { get; set; } = 1;
     public Configuration Configuration { get; set; } = new();
     public Dictionary<string, string> Assignments { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, MissingReference> MissingReferences { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public List<HistoryEntry> History { get; set; } = [];
     public string? HistoryFile { get; set; }
     public List<HistoryChunk> HistoryArchives { get; set; } = [];

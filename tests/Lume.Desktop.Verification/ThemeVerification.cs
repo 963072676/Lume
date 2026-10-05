@@ -18,7 +18,7 @@ public sealed partial class MainWindow
         var accent = Ui.Accent;
         var primary = Ui.Button("主题验证", () => { }, true);
         var tile = Ui.Button("选择验证", () => { }); Ui.UpdateTile(tile, true);
-        var surface = new Window { Content = Ui.Row(primary, tile), Left = -16000, Width = 400, Height = 150, ShowActivated = false };
+        var surface = new Window { Content = Ui.Row(primary, tile), Left = -16000, Width = 400, Height = 150, ShowActivated = false, ShowInTaskbar = false };
         var refreshCount = 0; void Changed() => refreshCount++;
         DesktopCardWindow? desktopCard = null;
         SystemDesktopWindow? systemCard = null;

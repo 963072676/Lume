@@ -20,6 +20,7 @@ public sealed class StateStore(string path)
     internal static AppState RollbackCopy(AppState state) => new()
     {
         Version = state.Version, Configuration = Clone(state.Configuration), Assignments = new(state.Assignments, StringComparer.OrdinalIgnoreCase),
+        MissingReferences = new(state.MissingReferences, StringComparer.OrdinalIgnoreCase),
         Desktop = Clone(state.Desktop), History = [.. state.History], HistoryArchives = [.. state.HistoryArchives],
         HistoryFile = state.HistoryFile, StorageRevision = state.StorageRevision
     };
@@ -60,15 +61,18 @@ public sealed class StateStore(string path)
         state.Desktop.Theme = ThemeIds.Normalize(state.Desktop.Theme);
         state.Configuration.Overrides = new(state.Configuration.Overrides, StringComparer.OrdinalIgnoreCase);
         state.Assignments = new(state.Assignments, StringComparer.OrdinalIgnoreCase);
+        state.MissingReferences = new(state.MissingReferences, StringComparer.OrdinalIgnoreCase);
     }
     private static void ValidateDesktop(DesktopPreferences value) => LayoutBackup.Validate(new(1, value.Positions, value.Cards, value.GlassOpacity, value.SnapEnabled, value.ShowSystemEntries));
     private static void ValidateHistory(List<HistoryEntry> history)
     {
         if (history == null || history.Any(e => e == null || e.Changes == null || string.IsNullOrEmpty(e.Id))) throw new InvalidDataException("历史记录无效。");
+        if (history.Any(e => e.RemovedAssignments != null && e.RemovedAssignments.Any(p => !System.IO.Path.IsPathFullyQualified(p.Key) || string.IsNullOrWhiteSpace(p.Value))))
+            throw new InvalidDataException("引用清理的撤销记录无效。");
     }
     private static void Validate(AppState state)
     {
-        if (state.Version is not (1 or 2)) throw new InvalidDataException("不支持的配置版本。");
+        if (state.Version is not (1 or 2 or 3)) throw new InvalidDataException("不支持的配置版本。");
         var c = state.Configuration;
         if (c.Collections.Count == 0 || c.Collections.Count(x => x.Id == "inbox") != 1 || c.Collections.Select(x => x.Id).Distinct().Count() != c.Collections.Count)
             throw new InvalidDataException("分区配置无效。");
@@ -85,6 +89,10 @@ public sealed class StateStore(string path)
             if (archive.Count < 1 || archive.Undoable < 0 || archive.Undoable > archive.Count) throw new InvalidDataException("历史分段索引无效。");
         }
         _ = c.Overrides.Count; _ = c.Samples.Count; _ = c.DismissedSuggestions.Count; _ = state.Assignments.Count;
+        if (state.MissingReferences == null || state.MissingReferences.Any(p => !System.IO.Path.IsPathFullyQualified(p.Key) || p.Value == null
+            || p.Value.FirstMissingUtc.Kind != DateTimeKind.Utc || p.Value.LastCheckedUtc.Kind != DateTimeKind.Utc
+            || p.Value.FirstMissingUtc > p.Value.LastCheckedUtc || string.IsNullOrEmpty(p.Value.ScopeIdentity)))
+            throw new InvalidDataException("引用缺失检测记录无效。");
     }
     private string DesktopPath(string revision) => BasePath + ".desktop." + revision + ".json";
     private static void ValidateHistoryName(string name)
@@ -132,13 +140,14 @@ public sealed class StateStore(string path)
         var revision = Guid.NewGuid().ToString("N");
         var envelope = new AppState
         {
-            Version = 2, Configuration = state.Configuration, Assignments = state.Assignments, Desktop = state.Desktop,
+            Version = Math.Max(2, state.Version), Configuration = state.Configuration, Assignments = state.Assignments, Desktop = state.Desktop,
+            MissingReferences = state.MissingReferences,
             History = [], HistoryFile = active.File, HistoryArchives = archives, StorageRevision = revision
         };
         // Retain a standalone original before the first split-format migration.
         if (File.Exists(Path) && state.StorageRevision == null && !File.Exists(BasePath + ".legacy.bak")) File.Copy(Path, BasePath + ".legacy.bak", false);
         AtomicWrite(Path, stream => JsonSerializer.Serialize(stream, envelope, Options));
-        state.Version = 2; state.History = recent; state.HistoryArchives = archives; state.HistoryFile = active.File; state.StorageRevision = revision;
+        state.Version = envelope.Version; state.History = recent; state.HistoryArchives = archives; state.HistoryFile = active.File; state.StorageRevision = revision;
         PruneUnreferencedFiles();
     }
 

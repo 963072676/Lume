@@ -44,10 +44,10 @@ internal static class AiVerification
         var settings = new AiSettingsStore(directory); settings.Save(new("https://fixture.invalid/v1", "fixture-key", ""), false, "播放器归应用");
         Check(!File.ReadAllText(Path.Combine(directory, "ai-settings.json")).Contains("fixture-key"), "AI 密钥没有明文落盘");
         Check(settings.ReadKey(settings.Load()) == "fixture-key", "AI 密钥通过 Windows 当前用户加密往返");
-        var owner = new Window { Left = -16000, ShowActivated = false }; owner.Show();
+        var owner = new Window { Left = -16000, ShowActivated = false, ShowInTaskbar = false }; owner.Show();
         var handler = new FakeProvider(); var changed = 0;
         var dialog = new AiAnalysisDialog(owner, organizer, directory, () => changed++, handler)
-            { WindowStartupLocation = WindowStartupLocation.Manual, Left = -16000, Top = 0, ShowActivated = false };
+            { WindowStartupLocation = WindowStartupLocation.Manual, Left = -16000, Top = 0, ShowActivated = false, ShowInTaskbar = false };
         try
         {
             dialog.Show(); dialog.UpdateLayout();
@@ -72,7 +72,7 @@ internal static class AiVerification
             Check(File.ReadAllText(organizer.Files.Single().Path) == "test bytes", "AI 归类未改变文件内容和路径");
             var quickHandler = new FakeProvider();
             var quick = new AiAnalysisDialog(owner, organizer, directory, () => { }, quickHandler, startAnalysis: true)
-                { WindowStartupLocation = WindowStartupLocation.Manual, Left = -16000, ShowActivated = false };
+                { WindowStartupLocation = WindowStartupLocation.Manual, Left = -16000, ShowActivated = false, ShowInTaskbar = false };
             try
             {
                 quick.Show();
@@ -83,7 +83,7 @@ internal static class AiVerification
             finally { quick.Close(); }
             var ruleHandler = new FakeProvider();
             var ruleDialog = new RuleDialog(owner, organizer, new Rule("ai-rule", "多媒体规则", "apps", [new Lume.Core.Condition("name", "contains", "多媒体")]), directory, ruleHandler)
-                { WindowStartupLocation = WindowStartupLocation.Manual, Left = -16000, ShowActivated = false };
+                { WindowStartupLocation = WindowStartupLocation.Manual, Left = -16000, ShowActivated = false, ShowInTaskbar = false };
             try
             {
                 ruleDialog.Show(); ruleDialog.UpdateLayout();

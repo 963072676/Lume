@@ -72,14 +72,14 @@ public sealed partial class MainWindow
             for (var i = 0; i < 40 && organizer.Files.Any(f => f.Path == sentinel); i++) await Task.Delay(150);
             if (organizer.Files.Any(f => f.Path == sentinel)) throw new InvalidOperationException("删除事件未更新视图。");
             Navigate("智能规则"); Capture(Path.Combine(folder, "rules.png"));
-            var dialog = new RuleDialog(this, organizer, organizer.State.Configuration.Rules[0]) { WindowStartupLocation = WindowStartupLocation.Manual, Left = -16000, Top = 0, ShowActivated = false };
+            var dialog = new RuleDialog(this, organizer, organizer.State.Configuration.Rules[0]) { WindowStartupLocation = WindowStartupLocation.Manual, Left = -16000, Top = 0, ShowActivated = false, ShowInTaskbar = false };
             dialog.Show(); await Task.Delay(100); dialog.UpdateLayout();
             var bitmap = new RenderTargetBitmap((int)dialog.ActualWidth, (int)dialog.ActualHeight, 96, 96, PixelFormats.Pbgra32); bitmap.Render(dialog);
             var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap)); using (var stream = File.Create(Path.Combine(folder, "rule-editor.png"))) encoder.Save(stream); dialog.Close();
             settingsSection = "常规"; Navigate("设置"); Capture(Path.Combine(folder, "settings.png")); Navigate("整理历史"); Capture(Path.Combine(folder, "history.png"));
             if (Archives != null)
             {
-                var archiveDialog = new ArchiveDialog(this, organizer, Archives, null, Path.GetDirectoryName(store.Path)) { WindowStartupLocation = WindowStartupLocation.Manual, Left = -16000, Top = 0, ShowActivated = false };
+                var archiveDialog = new ArchiveDialog(this, organizer, Archives, null, Path.GetDirectoryName(store.Path)) { WindowStartupLocation = WindowStartupLocation.Manual, Left = -16000, Top = 0, ShowActivated = false, ShowInTaskbar = false };
                 archiveDialog.Show(); await archiveDialog.VerifyAsync(folder); archiveDialog.UpdateLayout();
                 var archiveBitmap = new RenderTargetBitmap((int)archiveDialog.ActualWidth, (int)archiveDialog.ActualHeight, 96, 96, PixelFormats.Pbgra32); archiveBitmap.Render(archiveDialog);
                 var archiveEncoder = new PngBitmapEncoder(); archiveEncoder.Frames.Add(BitmapFrame.Create(archiveBitmap)); using (var archiveStream = File.Create(Path.Combine(folder, "archive.png"))) archiveEncoder.Save(archiveStream); archiveDialog.Close();

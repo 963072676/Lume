@@ -16,7 +16,7 @@ internal static class VisualVerification
         foreach (var label in new[] { two, three, four }) label.Measure(new Size(500, 40));
         Check(two.DesiredSize.Width == three.DesiredSize.Width && three.DesiredSize.Width == four.DesiredSize.Width && two.Distributed, "两三四字菜单真实字符间距分布后宽度一致");
         Check(new SpacedMenuText { Text = "一键 AI 整理" }.Distributed == false, "长菜单与英文不强行拉开字距");
-        var button = Ui.Button("菜单对齐", () => { }); var window = new Window { Content = button, Left = -16000, ShowActivated = false, Width = 400, Height = 100 };
+        var button = Ui.Button("菜单对齐", () => { }); var window = new Window { Content = button, Left = -16000, ShowActivated = false, ShowInTaskbar = false, Width = 400, Height = 100 };
         try
         {
             window.Show(); window.UpdateLayout();

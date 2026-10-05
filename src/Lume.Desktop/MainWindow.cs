@@ -87,7 +87,7 @@ public sealed partial class MainWindow : Window
         Title = "Lume · 桌面整理" + (demo ? " — 隔离演示" : "");
         Width = 1000; Height = 720; MinWidth = 840; MinHeight = 580;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
-        if (smoke) { WindowStartupLocation = WindowStartupLocation.Manual; Left = -16000; Top = 0; ShowActivated = false; }
+        if (smoke) { WindowStartupLocation = WindowStartupLocation.Manual; Left = -16000; Top = 0; ShowActivated = false; ShowInTaskbar = false; }
         selectedMode = Math.Clamp(organizer.State.Desktop.Mode, 0, 2);
         var layout = new DockPanel();
         var navigationBar = BuildNavigation(); DockPanel.SetDock(navigationBar, Dock.Top); layout.Children.Add(navigationBar);
@@ -473,6 +473,7 @@ public sealed partial class MainWindow : Window
 
     private void Render()
     {
+        if (page is not ("桌面" or "收件箱")) PrepareBoardTiles([]);
         if (Tokens.Theme.Id != ThemeIds.Normalize(organizer.State.Desktop.Theme)) Tokens.ApplyTheme(organizer.State.Desktop.Theme);
         BuildPageActions();
         var searchable = page is "桌面" or "收件箱" or "智能规则";

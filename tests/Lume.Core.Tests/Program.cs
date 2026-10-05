@@ -140,6 +140,8 @@ Test("旧配置和未知主题回退到晴空蓝", () =>
 });
 SelectionTests.Register(Test);
 ShellScanTests.Register(Test, root);
+ReferenceRetentionTests.Register(Test, root);
+CollectionQueryTests.Register(Test, root);
 var failed = 0;
 try
 {

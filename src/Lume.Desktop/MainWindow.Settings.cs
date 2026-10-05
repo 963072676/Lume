@@ -276,6 +276,13 @@ public sealed partial class MainWindow
             }
             catch (Exception ex) { ShowError(ex); }
         }), 3);
+        Ui.AddFormRow(dataGrid, "过期引用", "预览已删除文件留下的记录；默认等待 30 天，清理前完整备份。", Ui.Button("检测并清理…", () =>
+        {
+            if (referenceCleanup != null) { referenceCleanup.Activate(); return; }
+            referenceCleanup = new(this, organizer, store, RefreshView);
+            referenceCleanup.Closed += (_, _) => referenceCleanup = null;
+            referenceCleanup.Show();
+        }), 4);
         data.Children.Add(dataGrid);
         var transfers = Ui.Row(Ui.Button("导出完整数据备份…", ExportDataBackup), Ui.Button("恢复完整数据备份…", RestoreDataBackup));
         transfers.Margin = new(0, 12, 0, 0); data.Children.Add(transfers);
@@ -287,6 +294,7 @@ public sealed partial class MainWindow
     internal Func<string>? ReadGuardDescription { get; set; }
     internal Action<string>? RestoreDataRequested { get; set; }
     private bool dataTransferBusy;
+    private ReferenceCleanupWindow? referenceCleanup;
     private void AddAboutSettings(StackPanel panel)
     {
         var body = new StackPanel(); body.Children.Add(Ui.Text("Lume · 版本与运行环境", Tokens.SectionTitle, bold: true));

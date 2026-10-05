@@ -10,8 +10,9 @@ using Lume.Core;
 
 namespace Lume.Desktop;
 
-internal sealed record ShellRequest(string Kind, DesktopFile? File = null, string? Path = null, string? SystemId = null, int Generation = 0);
-internal sealed record ShellReply(bool Ok = true, ShortcutTarget? Target = null, byte[]? Pixels = null, int Width = 0, int Height = 0, long? Count = null, int Pid = 0);
+internal sealed record ShellRequest(string Kind, DesktopFile? File = null, string? Path = null, string? SystemId = null, int Generation = 0, string[]? Names = null);
+internal sealed record ShellReply(bool Ok = true, ShortcutTarget? Target = null, byte[]? Pixels = null, int Width = 0, int Height = 0, long? Count = null, int Pid = 0,
+    ReferenceProbeResult? References = null);
 
 /// <summary>Length-framed local IPC. Images are bounded raw pixels, never filenames or encoded image documents.</summary>
 internal static class ShellProtocol
@@ -110,6 +111,7 @@ internal static class ShellWorkerHost
             return request.Kind switch
             {
                 "shortcut" when request.Path != null => new(Target: ShortcutReader.Read(request.Path)),
+                "references" when request.Path != null && request.Names != null => new(References: WindowsReferenceProbe.Read(request.Path, request.Names)),
                 "icon" when request.File != null => ShellProtocol.Image(ShellIconReader.Read(request.File, request.Generation)),
                 "system" when SystemIconReader.IsKnownId(request.SystemId) => ReadSystem(request.SystemId!),
                 _ => new(false)

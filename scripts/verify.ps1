@@ -8,11 +8,14 @@ $appDirectory = Join-Path $projectRoot 'artifacts/verification-app'
 New-Item -ItemType Directory -Path $evidence -Force | Out-Null
 & $DotnetPath run --project (Join-Path $projectRoot 'tests/Lume.Core.Tests') -c Release 2>&1 | Tee-Object -FilePath (Join-Path $evidence 'core-tests.txt')
 if ($LASTEXITCODE -ne 0) { throw '核心回归失败。' }
+& (Join-Path $PSScriptRoot 'test-soak-status.ps1')
+Copy-Item -LiteralPath (Join-Path $projectRoot 'artifacts/soak-status-result.json') -Destination $evidence
 if (!$SkipBuild) { & (Join-Path $PSScriptRoot 'build.ps1') -DotnetPath $DotnetPath -Verification 2>&1 | Tee-Object -FilePath (Join-Path $evidence 'build.txt') }
 & $DotnetPath run --project (Join-Path $projectRoot 'tests/Lume.Recovery.Tests') -c Release -- (Join-Path $appDirectory 'Lume.Guard.exe') (Join-Path $evidence 'native-recovery')
 if ($LASTEXITCODE -ne 0) { throw '原生恢复保护验收失败。' }
 $stages = @(
     @{ Flag='--shell-worker-self-test'; Result='shell-worker-verification/latest-result.json'; Name='shell-worker' },
+    @{ Flag='--retention-self-test'; Result='retention-verification/latest-result.json'; Name='retention' },
     @{ Flag='--reliability-self-test'; Result='reliability-verification/latest-result.json'; Name='reliability' },
     @{ Flag='--menu-self-test'; Result='menu-verification/result.json'; Name='menu' },
     @{ Flag='--icons-self-test'; Result='icons-verification/result.json'; Name='icons' },

@@ -30,7 +30,7 @@ internal static class SystemIconVerification
         var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         void Changed(ShellIconChange change) { if ((change.EventId & 0x00002000) != 0) received.TrySetResult(); }
         ShellIconChanges.Changed += Changed;
-        var host = new Window { Left = -16000, Top = 0, Width = 300, Height = 200, ShowActivated = false };
+        var host = new Window { Left = -16000, Top = 0, Width = 300, Height = 200, ShowActivated = false, ShowInTaskbar = false };
         SystemDesktopWindow? card = null;
         var pidl = IntPtr.Zero;
         try

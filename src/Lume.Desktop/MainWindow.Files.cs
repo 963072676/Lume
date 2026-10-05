@@ -9,6 +9,23 @@ namespace Lume.Desktop;
 
 public sealed partial class MainWindow
 {
+    private readonly Dictionary<string, (DesktopFile File, Button Tile, string Theme)> boardTiles = new(StringComparer.OrdinalIgnoreCase);
+
+    private void PrepareBoardTiles(IReadOnlyList<DesktopFile> visible)
+    {
+        // Retain only the current page. Detach reused controls so they cannot pin old page trees.
+        foreach (var entry in boardTiles.Values)
+            if (entry.Tile.Parent is Panel parent) parent.Children.Remove(entry.Tile);
+        var paths = visible.Select(f => f.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in boardTiles.Keys.Where(p => !paths.Contains(p)).ToArray()) boardTiles.Remove(path);
+    }
+    private Button BoardTile(DesktopFile file)
+    {
+        if (boardTiles.TryGetValue(file.Path, out var cached) && cached.File == file && cached.Theme == Tokens.Theme.Id)
+        { boardSelection.Add(file, cached.Tile); return cached.Tile; }
+        var tile = (Button)BuildFileTile(file, boardSelection);
+        boardTiles[file.Path] = (file, tile, Tokens.Theme.Id); return tile;
+    }
     private IReadOnlyList<Collection> ViewCollections() => organizer.State.Configuration.Collections
         .Where(c => page == "收件箱" ? c.Id == "inbox" : selectedMode == 0 || selectedMode == 1 && c.InWork || selectedMode == 2 && c.InPresentation).ToList();
 
@@ -21,7 +38,8 @@ public sealed partial class MainWindow
         var railTitle = Ui.Text("分区", Tokens.Label, Ui.Muted); railTitle.Margin = new(12, 4, 0, 12); DockPanel.SetDock(railTitle, Dock.Top); rail.Children.Add(railTitle);
         var add = Ui.Button("＋ 新建分区", AddCollection); add.Margin = new(0, 12, 0, 0); add.BorderThickness = new(0); add.Background = Brushes.Transparent; DockPanel.SetDock(add, Dock.Bottom); rail.Children.Add(add);
         var links = new StackPanel();
-        var grouped = collections.Select(c => (Collection: c, Files: organizer.CollectionFiles(c.Id, search.Text))).ToList();
+        var queried = organizer.QueryCollections(collections.Select(c => c.Id), search.Text);
+        var grouped = collections.Select(c => (Collection: c, Files: queried[c.Id])).ToList();
         var all = grouped.SelectMany(g => g.Files).DistinctBy(f => f.Path, StringComparer.OrdinalIgnoreCase).ToList();
         void Link(string? id, string name, string color, int count, bool acceptsDrop)
         {
@@ -52,7 +70,8 @@ public sealed partial class MainWindow
             var pager = Ui.Row(previous, Ui.Text($"{filePage + 1} / {pages}  ", Tokens.Secondary, Ui.Muted), next); DockPanel.SetDock(pager, Dock.Right); footer.Children.Add(pager);
         }
         footer.Children.Add(Ui.Text(pages > 1 ? "Ctrl+A 选择本页" : "双击打开 · 空格预览 · 拖到左侧归类", Tokens.Label, Ui.Muted)); body.Children.Add(footer);
-        var tiles = new WrapPanel(); foreach (var file in visible) tiles.Children.Add(BuildFileTile(file, boardSelection));
+        PrepareBoardTiles(visible);
+        var tiles = new WrapPanel(); foreach (var file in visible) tiles.Children.Add(BoardTile(file));
         if (selected.Count == 0)
         {
             var empty = new StackPanel { VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center, Margin = new(20) };

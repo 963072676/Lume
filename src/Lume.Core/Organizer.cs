@@ -2,7 +2,7 @@ namespace Lume.Core;
 
 public enum ScanApplyResult { Unchanged, Changed, Stale }
 
-public sealed class Organizer(StateStore store, AppState state)
+public sealed partial class Organizer(StateStore store, AppState state)
 {
     private long contentRevision;
     private HashSet<string> deferredTargets = new(StringComparer.OrdinalIgnoreCase);
@@ -33,25 +33,7 @@ public sealed class Organizer(StateStore store, AppState state)
     });
     public void SetLayout(Dictionary<string, CardPlacement> positions) => DesktopTransaction(() => State.Desktop.Positions = positions);
     public void RestoreDesktop(DesktopPreferences preferences) => DesktopTransaction(() => State.Desktop = StateStore.Clone(preferences));
-    public IReadOnlyList<DesktopFile> CollectionFiles(string id, string query = "")
-    {
-        var collection = State.Configuration.Collections.First(c => c.Id == id); var options = Options(id);
-        IEnumerable<DesktopFile> selected = collection.Recent ? Files.Where(f => !f.IsDirectory).OrderByDescending(f => f.ModifiedUtc).Take(40)
-            : collection.MappedPath != null ? Files.Where(f => string.Equals(System.IO.Path.GetDirectoryName(f.Path), collection.MappedPath, StringComparison.OrdinalIgnoreCase))
-            : Files.Where(f => CollectionOf(f) == id && (State.Configuration.Overrides.ContainsKey(f.Path) || !State.Configuration.Collections.Any(c => c.MappedPath != null && string.Equals(System.IO.Path.GetDirectoryName(f.Path), c.MappedPath, StringComparison.OrdinalIgnoreCase))));
-        var terms = RuleEngine.SearchTerms(query);
-        if (terms.Length > 0) selected = selected.Where(f => RuleEngine.Search(f, terms));
-        if (collection.Recent) return selected.ToList();
-        if (options.Sort == "manual")
-        {
-            var order = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            if (options.Order != null)
-                for (var i = 0; i < options.Order.Count; i++) order.TryAdd(options.Order[i], i);
-            return selected.OrderBy(f => order.GetValueOrDefault(f.Path, int.MaxValue)).ThenBy(f => f.Name).ToList();
-        }
-        Func<DesktopFile, object> key = options.Sort switch { "modified" => f => f.ModifiedUtc, "size" => f => f.Size, "type" => f => f.Extension, _ => f => f.Name };
-        return (options.Descending ? selected.OrderByDescending(key) : selected.OrderBy(key)).ThenBy(f => f.Name).ToList();
-    }
+    public IReadOnlyList<DesktopFile> CollectionFiles(string id, string query = "") => QueryCollections([id], query)[id];
     public void AddMappedCollection(string path)
     {
         path = System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(path));
@@ -111,6 +93,7 @@ public sealed class Organizer(StateStore store, AppState state)
 
     public bool ApplyScan(ScanResult scan, bool reclassify = true)
     {
+        collectionCatalog = null;
         Files = scan.Files;
         Warnings = scan.Warnings;
         SetDeferredTargets(scan);
@@ -121,6 +104,7 @@ public sealed class Organizer(StateStore store, AppState state)
 
     public async Task<ScanApplyResult> ApplyScanAsync(ScanResult scan, bool reclassify = true, CancellationToken cancellation = default)
     {
+        collectionCatalog = null;
         Files = scan.Files; Warnings = scan.Warnings;
         SetDeferredTargets(scan);
         if (!reclassify) return ScanApplyResult.Unchanged;
@@ -368,9 +352,15 @@ public sealed class Organizer(StateStore store, AppState state)
             if (entry.PreviousConfiguration != null) State.Configuration = StateStore.Clone(entry.PreviousConfiguration);
             else foreach (var change in entry.Changes) State.Configuration.Overrides[change.Path] = change.Before ?? "inbox";
             StateStore.Normalize(State);
+            if (entry.RemovedAssignments != null)
+                foreach (var pair in entry.RemovedAssignments)
+                {
+                    State.Assignments[pair.Key] = pair.Value;
+                    State.MissingReferences.Remove(pair.Key);
+                }
             Reclassify();
             var replacement = new HistoryEntry { Id = entry.Id, TimeUtc = entry.TimeUtc, Title = entry.Title, Detail = entry.Detail,
-                PreviousConfiguration = entry.PreviousConfiguration, Changes = entry.Changes, Undone = true };
+                PreviousConfiguration = entry.PreviousConfiguration, Changes = entry.Changes, RemovedAssignments = entry.RemovedAssignments, Undone = true };
             history[history.IndexOf(entry)] = replacement;
             if (archiveIndex >= 0) State.HistoryArchives[archiveIndex] = store.WriteHistory(history);
         });
