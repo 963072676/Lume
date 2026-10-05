@@ -97,7 +97,11 @@ internal static class ShellWorkerHost
     private static ShellReply Handle(ShellRequest request)
     {
 #if VERIFICATION
-        if (request.Kind == "hang") { Thread.Sleep(Timeout.Infinite); return new(false); }
+        if (request.Kind == "hang")
+        {
+            if (request.Path != null) File.WriteAllText(request.Path, Environment.ProcessId.ToString());
+            Thread.Sleep(Timeout.Infinite); return new(false);
+        }
         if (request.Kind == "crash") Environment.Exit(17);
         if (request.Kind == "echo") return new(Pid: Environment.ProcessId);
 #endif

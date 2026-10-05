@@ -17,6 +17,10 @@ internal static class ShellWorkerVerification
         using var client = new ShellWorkerClient();
         var reply = client.SendAsync(new("echo"), limit: TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
         if (reply is not { Ok: true, Pid: > 0 }) return 1;
+        var ready = args[1] + ".ready";
+        _ = client.SendAsync(new("hang", Path: ready), limit: TimeSpan.FromSeconds(10));
+        var clock = Stopwatch.StartNew();
+        while (!File.Exists(ready)) { if (clock.Elapsed > TimeSpan.FromSeconds(2)) return 1; Thread.Sleep(10); }
         File.WriteAllText(args[1], JsonSerializer.Serialize(new { ownerPid = Environment.ProcessId, workerPid = reply.Pid }));
         Thread.Sleep(Timeout.Infinite); return 0;
     }
@@ -129,7 +133,7 @@ internal static class ShellWorkerVerification
                     Check(record.RootElement.GetProperty("ownerPid").GetInt32() == owner.Id && Alive(childPid), "退出保护验证只使用本次创建的测试父子进程");
                     owner.Kill(); await owner.WaitForExitAsync();
                     await Until(() => !Alive(childPid), TimeSpan.FromSeconds(3));
-                    Check(!Alive(childPid), "所属进程被强制结束后工作进程自动退出");
+                    Check(!Alive(childPid), "所属进程被强制结束后挂起中的工作进程自动退出");
                 }
                 finally { if (!owner.HasExited) { owner.Kill(); await owner.WaitForExitAsync(); } }
 
