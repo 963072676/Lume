@@ -17,7 +17,7 @@ internal static class MediaThumbnails
     [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = true)]
     private static extern int SHCreateItemFromParsingName(string path, IntPtr context, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out IImageFactory item);
     [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr value);
-    // Called on ShellIcons' bounded STA workers, never the UI thread.
+    // Called only in the isolated STA Shell process.
     public static BitmapSource? Read(DesktopFile file)
     {
         var info = new FileInfo(file.Path);

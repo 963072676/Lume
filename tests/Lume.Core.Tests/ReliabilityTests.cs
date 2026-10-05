@@ -30,6 +30,55 @@ internal static class ReliabilityTests
     }
     public static void Register(Action<string, Action> test, string root)
     {
+        test("AI 后台核对后整批应用且可撤销", () =>
+        {
+            var folder = Path.Combine(root, "async-ai"); Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, "a.xyz"); File.WriteAllText(path, "fixture");
+            var organizer = new Organizer(new StateStore(Path.Combine(folder, "state.json")), AppState.Create([]));
+            organizer.ApplyScan(DesktopScanner.Scan([], [path])); var snapshot = organizer.CaptureAiSnapshot();
+            var pump = new Pump(); var previous = SynchronizationContext.Current; SynchronizationContext.SetSynchronizationContext(pump);
+            try
+            {
+                pump.Complete(organizer.ApplyAiSuggestionsAsync(snapshot, [new(snapshot.Items[0].Id, "apps", "test", .9)]));
+                Check(organizer.CollectionOf(organizer.Files[0]) == "apps");
+                organizer.Undo(); Check(organizer.CollectionOf(organizer.Files[0]) == "inbox");
+            }
+            finally { SynchronizationContext.SetSynchronizationContext(previous); }
+        });
+        test("AI 后台核对取消或快捷目标超时整批不提交", () =>
+        {
+            var folder = Path.Combine(root, "failed-ai"); Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, "a.url"); File.WriteAllText(path, "fixture");
+            var organizer = new Organizer(new StateStore(Path.Combine(folder, "state.json")), AppState.Create([]));
+            organizer.ApplyScan(DesktopScanner.Scan([], [path], _ => null)); var snapshot = organizer.CaptureAiSnapshot();
+            var originalCollection = organizer.CollectionOf(organizer.Files[0]);
+            var selected = new[] { new AiSuggestion(snapshot.Items[0].Id, "apps", "test", .9) }; var history = organizer.State.History.Count;
+            var pump = new Pump(); var previous = SynchronizationContext.Current; SynchronizationContext.SetSynchronizationContext(pump);
+            try
+            {
+                Reject<TimeoutException>(() => pump.Complete(organizer.ApplyAiSuggestionsAsync(snapshot, selected, readShortcut: _ => throw new TimeoutException())));
+                using var cancel = new CancellationTokenSource(); cancel.Cancel();
+                Reject<OperationCanceledException>(() => pump.Complete(organizer.ApplyAiSuggestionsAsync(snapshot, selected, cancellation: cancel.Token)));
+                Check(organizer.State.History.Count == history && organizer.CollectionOf(organizer.Files[0]) == originalCollection);
+            }
+            finally { SynchronizationContext.SetSynchronizationContext(previous); }
+        });
+        test("AI 后台核对拒绝期间发生的手动归类", () =>
+        {
+            var folder = Path.Combine(root, "stale-ai"); Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, "a.txt"); File.WriteAllText(path, "fixture");
+            var organizer = new Organizer(new StateStore(Path.Combine(folder, "state.json")), AppState.Create([]));
+            organizer.ApplyScan(DesktopScanner.Scan([], [path])); var snapshot = organizer.CaptureAiSnapshot();
+            var pump = new Pump(); var previous = SynchronizationContext.Current; SynchronizationContext.SetSynchronizationContext(pump);
+            try
+            {
+                var work = organizer.ApplyAiSuggestionsAsync(snapshot, [new(snapshot.Items[0].Id, "apps", "test", .9)]);
+                organizer.Assign(path, "work"); var history = organizer.State.History.Count;
+                Reject<InvalidOperationException>(() => pump.Complete(work));
+                Check(organizer.State.History.Count == history && organizer.CollectionOf(organizer.Files[0]) == "work");
+            }
+            finally { SynchronizationContext.SetSynchronizationContext(previous); }
+        });
         var now = DateTime.UtcNow;
         DesktopFile Item(string name) => new(Path.Combine(root, name), name, Path.GetExtension(name), 1024, now, now, false, "未知来源");
         Rule RuleOf(string value, string op = "in") => new("reliability-rule", "回归规则", "work", [new(op == "in" ? "extension" : "name", op, value)]);

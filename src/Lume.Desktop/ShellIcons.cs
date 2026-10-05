@@ -1,8 +1,5 @@
-using System.Collections.Concurrent;
-using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Lume.Core;
@@ -11,29 +8,11 @@ namespace Lume.Desktop;
 
 internal static class ShellIcons
 {
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct FileInfo
-    {
-        public IntPtr Icon;
-        public int IconIndex;
-        public uint Attributes;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string DisplayName;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)] public string TypeName;
-    }
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
-    private static extern IntPtr SHGetFileInfo(string path, uint attributes, ref FileInfo info, uint size, uint flags);
-    [DllImport("user32.dll")] private static extern bool DestroyIcon(IntPtr icon);
-    [DllImport("ole32.dll")] private static extern int OleInitialize(IntPtr reserved);
-    [DllImport("ole32.dll")] private static extern void OleUninitialize();
     private sealed record Entry(DesktopFile File, string? IconPath, Task<ImageSource> Task, DateTime Created);
-    private sealed record Request(DesktopFile File, TaskCompletionSource<ImageSource> Completion);
     internal sealed record SystemIconResult(ImageSource Icon, long? Count);
-    private sealed record SystemRequest(SystemDesktopWindow.Entry Entry, TaskCompletionSource<SystemIconResult> Completion);
     private static readonly object Gate = new();
     private static readonly Dictionary<string, Entry> Cache = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly BlockingCollection<Request> Queue = new(256);
-    private static readonly BlockingCollection<SystemRequest> SystemQueue = new(32);
-    private static readonly ConcurrentDictionary<string, BitmapSource> TypeIcons = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Lazy<ShellWorkerClient> Worker = new(() => new());
     private static readonly ImageSource AppFallback = DrawFallback(true, false);
     private static readonly ImageSource FileFallback = DrawFallback(false, false);
     private static readonly ImageSource FolderFallback = DrawFallback(false, true);
@@ -41,14 +20,7 @@ internal static class ShellIcons
     internal static event Action<string?>? Invalidated;
     static ShellIcons()
     {
-        // Shell 图标读取在有限数量的后台 STA 中执行，不阻塞抽屉交互。
-        for (var i = 0; i < 2; i++)
-        {
-            var worker = new Thread(Work) { IsBackground = true, Name = "Lume 图标加载 " + i };
-            worker.SetApartmentState(ApartmentState.STA); worker.Start();
-        }
-        var systemWorker = new Thread(SystemWork) { IsBackground = true, Name = "Lume 系统图标加载" };
-        systemWorker.SetApartmentState(ApartmentState.STA); systemWorker.Start();
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => { if (Worker.IsValueCreated) Worker.Value.Dispose(); };
     }
     internal static bool HasIndividualIcon(DesktopFile file) => !file.IsDirectory &&
         (FilePresentation.IsShortcut(file) || MediaThumbnails.Supports(file) || file.Extension.Equals(".exe", StringComparison.OrdinalIgnoreCase) || file.Extension.Equals(".ico", StringComparison.OrdinalIgnoreCase));
@@ -61,18 +33,31 @@ internal static class ShellIcons
         lock (Gate)
         {
             var key = CacheKey(file); var now = DateTime.UtcNow;
-            if (Cache.TryGetValue(key, out var cached) && (now - cached.Created < TimeSpan.FromMinutes(2) || !cached.Task.IsCompleted)) return cached.Task;
+            if (Cache.TryGetValue(key, out var cached) && (!cached.Task.IsCompleted || now - cached.Created <
+                (cached.Task.IsCompletedSuccessfully && cached.Task.Result is BitmapSource ? TimeSpan.FromMinutes(2) : TimeSpan.FromSeconds(5)))) return cached.Task;
             if (Cache.Count >= 512)
                 foreach (var old in Cache.Where(p => p.Value.Task.IsCompleted).OrderBy(p => p.Value.Created).Take(128).Select(p => p.Key).ToArray()) Cache.Remove(old);
-            var completion = new TaskCompletionSource<ImageSource>(TaskCreationOptions.RunContinuationsAsynchronously);
-            if (!Queue.TryAdd(new(file, completion))) return Task.FromResult(Fallback(file));
-            Cache[key] = new(file, IconResourcePath(file), completion.Task, now); return completion.Task;
+            var task = ReadAsync(file);
+            Cache[key] = new(file, IconResourcePath(file), task, now); return task;
         }
     }
-    internal static Task<SystemIconResult> GetSystemAsync(SystemDesktopWindow.Entry entry)
+    internal static async Task<SystemIconResult> GetSystemAsync(SystemDesktopWindow.Entry entry)
     {
-        var completion = new TaskCompletionSource<SystemIconResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-        return SystemQueue.TryAdd(new(entry, completion)) ? completion.Task : Task.FromResult(new SystemIconResult(SystemDesktopWindow.FallbackIcon, null));
+        try
+        {
+            var reply = await Worker.Value.SendAsync(new("system", SystemId: entry.Id)).ConfigureAwait(false);
+            return new(ShellProtocol.Decode(reply) ?? SystemDesktopWindow.FallbackIcon, reply is { Ok: true } ? reply.Count : null);
+        }
+        catch (System.IO.InvalidDataException) { return new(SystemDesktopWindow.FallbackIcon, null); }
+    }
+    private static async Task<ImageSource> ReadAsync(DesktopFile file)
+    {
+        try
+        {
+            var reply = await Worker.Value.SendAsync(new("icon", file, Generation: Volatile.Read(ref associationGeneration))).ConfigureAwait(false);
+            return ShellProtocol.Decode(reply) ?? Fallback(file);
+        }
+        catch (System.IO.InvalidDataException) { return Fallback(file); }
     }
     private static bool Affected(DesktopFile file, string? iconPath, string path)
     {
@@ -103,7 +88,6 @@ internal static class ShellIcons
         {
             Interlocked.Increment(ref associationGeneration);
             lock (Gate) Cache.Clear();
-            TypeIcons.Clear();
             Invalidated?.Invoke(null);
         }
         else if (!string.IsNullOrEmpty(change.Path) || !string.IsNullOrEmpty(change.NewPath))
@@ -137,70 +121,6 @@ internal static class ShellIcons
                 await image.Dispatcher.InvokeAsync(() => { if (requested == version) image.Source = source; });
         }
         return image;
-    }
-    private static void SystemWork()
-    {
-        var initialized = OleInitialize(IntPtr.Zero) >= 0;
-        try
-        {
-            foreach (var request in SystemQueue.GetConsumingEnumerable())
-            {
-                SystemIconResult icon;
-                try { icon = initialized ? SystemDesktopWindow.ReadSystemIcon(request.Entry) : new(SystemDesktopWindow.FallbackIcon, null); }
-                catch (Exception) { icon = new(SystemDesktopWindow.FallbackIcon, null); }
-                request.Completion.TrySetResult(icon);
-            }
-        }
-        finally { if (initialized) OleUninitialize(); }
-    }
-    private static void Work()
-    {
-        var initialized = OleInitialize(IntPtr.Zero) >= 0;
-        try
-        {
-            foreach (var request in Queue.GetConsumingEnumerable())
-            {
-                ImageSource icon;
-                try { icon = IconArtwork.Normalize(initialized ? Resolve(request.File) : Fallback(request.File), MediaThumbnails.Supports(request.File)); }
-                catch (Exception) { icon = Fallback(request.File); }
-                request.Completion.TrySetResult(icon);
-            }
-        }
-        finally { if (initialized) OleUninitialize(); }
-    }
-    private static ImageSource Resolve(DesktopFile file)
-    {
-        if (MediaThumbnails.Supports(file))
-        {
-            try { if (MediaThumbnails.Read(file) is { } thumbnail) return thumbnail; } catch (Exception) { }
-        }
-        var typeKey = file.IsDirectory ? "<directory>" : file.Extension;
-        var generation = Volatile.Read(ref associationGeneration);
-        if (!TypeIcons.TryGetValue(typeKey, out var generic))
-        {
-            generic = Read(file.IsDirectory ? "folder" : "file" + file.Extension, file.IsDirectory ? 0x10u : 0x80u, true);
-            if (generic != null)
-            {
-                if (TypeIcons.Count >= 256) TypeIcons.Clear();
-                if (generation == Volatile.Read(ref associationGeneration)) TypeIcons.TryAdd(typeKey, generic);
-            }
-        }
-        if (!HasIndividualIcon(file)) return generic ?? Fallback(file);
-        // 用真实快捷方式路径读取指定图标/目标图标；不执行目标，也不生成正文缩略图。
-        var actual = Read(file.Path, 0, false);
-        return actual != null && (generic == null || !SamePixels(actual, generic)) ? actual : Fallback(file);
-    }
-    private static BitmapSource? Read(string path, uint attributes, bool typeOnly)
-    {
-        var info = new FileInfo();
-        try
-        {
-            _ = SHGetFileInfo(path, attributes, ref info, (uint)Marshal.SizeOf<FileInfo>(), 0x100u | (typeOnly ? 0x10u : 0));
-            if (info.Icon == IntPtr.Zero) return null;
-            var image = Imaging.CreateBitmapSourceFromHIcon(info.Icon, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
-            image.Freeze(); return image;
-        }
-        finally { if (info.Icon != IntPtr.Zero) DestroyIcon(info.Icon); }
     }
     internal static bool SamePixels(BitmapSource first, BitmapSource second)
     {

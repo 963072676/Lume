@@ -23,7 +23,7 @@ internal static class IconArtwork
         var visual = new DrawingVisual();
         using (var drawing = visual.RenderOpen())
         {
-            if (thumbnail) drawing.DrawRoundedRectangle(Ui.Brush("#F1F4EF"), new Pen(Ui.Brush("#CBD6CC"), 2), new Rect(5, 5, 118, 118), 12, 12);
+            if (thumbnail) drawing.DrawRoundedRectangle(new SolidColorBrush(Color.FromRgb(241, 244, 239)), new Pen(new SolidColorBrush(Color.FromRgb(203, 214, 204)), 2), new Rect(5, 5, 118, 118), 12, 12);
             var available = thumbnail ? 110.0 : 116.0;
             var ratio = available / Math.Max(Math.Max(artwork.Width, artwork.Height), 1);
             var width = artwork.Width * ratio; var height = artwork.Height * ratio;

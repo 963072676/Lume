@@ -13,6 +13,8 @@ internal sealed class AiAnalysisDialog : Window
     private readonly AiSettingsStore settings;
     private readonly HttpClient http;
     private readonly AiAnalysisClient client;
+    private readonly ShellWorkerClient shortcutWorker;
+    private readonly bool ownsShortcutWorker;
     private readonly TextBox baseUrl = new() { MinWidth = 300, MaxLength = 2048, ToolTip = "例如 https://服务地址/v1；本机服务可使用 http://localhost:端口/v1" };
     private readonly PasswordBox key = new() { MinWidth = 300, MaxLength = 4096, Padding = new(8), ToolTip = "使用 Windows 当前用户加密保存。本机免密服务可留空。" };
     private readonly ComboBox model = new() { IsEditable = true, MinWidth = 220, MaxDropDownHeight = 250, ToolTip = "可获取后选择，也可直接输入模型名称" };
@@ -31,9 +33,11 @@ internal sealed class AiAnalysisDialog : Window
     private CancellationTokenSource? cancellation;
     private bool closed;
 
-    public AiAnalysisDialog(Window owner, Organizer organizer, string directory, Action changed, HttpMessageHandler? handler = null, bool startAnalysis = false)
+    public AiAnalysisDialog(Window owner, Organizer organizer, string directory, Action changed, HttpMessageHandler? handler = null, bool startAnalysis = false,
+        ShellWorkerClient? shortcutWorker = null)
     {
         Owner = owner; this.organizer = organizer; this.changed = changed; settings = new(directory);
+        this.shortcutWorker = shortcutWorker ?? new(); ownsShortcutWorker = shortcutWorker == null;
         http = new(handler ?? new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = Timeout.InfiniteTimeSpan }; client = new(http);
         Style = (Style)Application.Current.FindResource(typeof(Window));
         Title = "AI 分析与归类"; Width = 820; Height = 720; MinWidth = 760; MinHeight = 600; WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -70,7 +74,7 @@ internal sealed class AiAnalysisDialog : Window
             catch (Exception) { status.Text = "已保存的密钥无法解密，请重新输入。"; }
         }
         catch (Exception) { status.Text = "AI 配置无法读取，原文件已保留；请重新填写后保存。"; }
-        Closed += (_, _) => { closed = true; cancellation?.Cancel(); http.Dispose(); };
+        Closed += (_, _) => { closed = true; cancellation?.Cancel(); if (ownsShortcutWorker) this.shortcutWorker.Dispose(); http.Dispose(); };
         if (startAnalysis) Loaded += async (_, _) =>
         {
             if (string.IsNullOrWhiteSpace(model.Text)) { status.Text = "首次使用：请填写接口和模型，再点击分析桌面分组。"; baseUrl.Focus(); }
@@ -144,23 +148,38 @@ internal sealed class AiAnalysisDialog : Window
         catch (Exception ex) { snapshot = null; if (!closed) ShowFailure(ex); }
         finally { cancellation.Dispose(); cancellation = null; if (!closed) Busy(false); }
     }
-    private void Apply()
+    private async void Apply()
     {
-        if (snapshot == null) return;
+        if (snapshot == null || cancellation != null) return;
+        cancellation = new(); Busy(true); results.IsEnabled = false;
         try
         {
             var selected = selections.Where(s => s.Check.IsChecked == true).Select(s => s.Suggestion with { CollectionId = s.Target.SelectedValue as string ?? s.Suggestion.CollectionId }).ToList();
-            organizer.ApplyAiSuggestions(snapshot, selected, pendingCollections); changed();
+            var token = cancellation.Token; var clock = System.Diagnostics.Stopwatch.StartNew();
+            status.Text = "正在核对文件是否变化…";
+            await organizer.ApplyAiSuggestionsAsync(snapshot, selected, pendingCollections, file =>
+            {
+                if (!FilePresentation.IsShortcut(file)) return null;
+                var remaining = TimeSpan.FromSeconds(8) - clock.Elapsed;
+                if (remaining <= TimeSpan.Zero) throw new TimeoutException("快捷目标暂时无法核对，本次建议未应用，请稍后重试。");
+                var reply = shortcutWorker.SendAsync(new("shortcut", Path: file.Path), token,
+                    remaining < ShellWorkerClient.RequestLimit ? remaining : ShellWorkerClient.RequestLimit).GetAwaiter().GetResult();
+                if (reply is not { Ok: true }) throw new TimeoutException("快捷目标暂时无法核对，本次建议未应用，请稍后重试。");
+                return reply.Target;
+            }, token);
+            if (closed) return;
+            changed();
             status.Text = $"已应用 {selected.Count} 项，原文件未移动。可在整理历史中撤销。";
             snapshot = null; selections.Clear(); apply.IsEnabled = false; results.IsEnabled = false;
         }
-        catch (Exception ex) { ShowFailure(ex); }
+        catch (Exception ex) { if (!closed) ShowFailure(ex); }
+        finally { cancellation.Dispose(); cancellation = null; if (!closed) { Busy(false); results.IsEnabled = snapshot != null; } }
     }
     private void ShowFailure(Exception ex) => status.Text = ex switch
     {
         OperationCanceledException => cancellation?.IsCancellationRequested == true ? "请求已取消，没有应用归类。" : "请求超时，请重试或更换模型。",
         HttpRequestException => "连接失败，请检查服务地址、网络和服务是否运行。",
-        InvalidOperationException or InvalidDataException => ex.Message,
+        InvalidOperationException or InvalidDataException or TimeoutException => ex.Message,
         _ => "操作失败，请检查配置和本地文件权限；没有应用新的归类。"
     };
 }

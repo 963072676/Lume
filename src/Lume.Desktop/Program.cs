@@ -11,14 +11,27 @@ public static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+#if VERIFICATION
+        if (Environment.GetEnvironmentVariable("LUME_VERIFY_SOFTWARE_RENDERING") == "1")
+            System.Windows.Media.RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
+#endif
+        if (args.FirstOrDefault() == "--shell-worker") return ShellWorkerHost.Run(args);
+#if VERIFICATION
+        if (args.FirstOrDefault() == "--shell-owner-self-test") return ShellWorkerVerification.OwnerProbe(args);
+#endif
+        return RunApplication(args);
+    }
+    // Keep the headless worker from JIT-loading the complete UI startup path and its dependencies.
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static int RunApplication(string[] args)
+    {
         try { if (PackageIsolation.RelaunchIfNeeded(args)) return 0; }
         catch (Exception ex) { MessageBox.Show(ex.Message, "Lume 启动环境修复失败"); return 1; }
         if (args.FirstOrDefault() == "--guard") return DesktopRecovery.Guard(args);
 #if VERIFICATION
-        if (Environment.GetEnvironmentVariable("LUME_VERIFY_SOFTWARE_RENDERING") == "1")
-            System.Windows.Media.RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
         if (args.Contains("--performance-self-test")) return MainWindow.RunPerformanceVerification(args);
         if (args.Contains("--reliability-self-test")) return ReliabilityVerification.Run();
+        if (args.Contains("--shell-worker-self-test")) return ShellWorkerVerification.Run();
         if (args.Contains("--menu-self-test")) return DesktopMenuVerification.Run();
         if (args.Contains("--icons-self-test")) return IconVerification.Run();
         if (args.Contains("--features-self-test")) return FeatureVerification.Run(!args.Contains("--no-input"));

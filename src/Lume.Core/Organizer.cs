@@ -5,6 +5,8 @@ public enum ScanApplyResult { Unchanged, Changed, Stale }
 public sealed class Organizer(StateStore store, AppState state)
 {
     private long contentRevision;
+    private HashSet<string> deferredTargets = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> deferredAssignments = new(StringComparer.OrdinalIgnoreCase);
     public AppState State { get; private set; } = state;
     public IReadOnlyList<DesktopFile> Files { get; private set; } = [];
     public IReadOnlyList<string> Warnings { get; private set; } = [];
@@ -68,7 +70,8 @@ public sealed class Organizer(StateStore store, AppState state)
         var selected = paths.Select(System.IO.Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         if (!State.Configuration.Collections.Any(c => c.Id == id && c.MappedPath == null && !c.Recent)) throw new InvalidOperationException("映射和最近文件分区由目录内容决定，请拖入普通分区。");
         var unknown = selected.Where(p => !Files.Any(f => f.Path.Equals(p, StringComparison.OrdinalIgnoreCase))).ToList();
-        var scan = DesktopScanner.Scan([], unknown);
+        // Import is a manual reference operation; target enrichment happens in the background scan.
+        var scan = DesktopScanner.Scan([], unknown, _ => null);
         if (scan.Files.Count != unknown.Count) throw new InvalidOperationException("部分文件不可访问，未导入；请检查文件是否已移动或属于系统隐藏文件。");
         Edit("拖入分区", c => { foreach (var path in selected) { c.Overrides[path] = id; State.Assignments[path] = id; } c.LinkedFiles = c.LinkedFiles.Concat(unknown).Distinct(StringComparer.OrdinalIgnoreCase).ToList(); }, "只创建分区引用，原文件保留在原位置。");
         Files = Files.Concat(scan.Files).ToList();
@@ -110,6 +113,7 @@ public sealed class Organizer(StateStore store, AppState state)
     {
         Files = scan.Files;
         Warnings = scan.Warnings;
+        SetDeferredTargets(scan);
         if (!reclassify) return false;
         var changes = CalculateChanges();
         return CommitScanChanges(changes);
@@ -118,9 +122,10 @@ public sealed class Organizer(StateStore store, AppState state)
     public async Task<ScanApplyResult> ApplyScanAsync(ScanResult scan, bool reclassify = true, CancellationToken cancellation = default)
     {
         Files = scan.Files; Warnings = scan.Warnings;
+        SetDeferredTargets(scan);
         if (!reclassify) return ScanApplyResult.Unchanged;
         var revision = contentRevision; var original = State; var files = Files;
-        var snapshot = RuleEngine.ClassificationSnapshot(State.Configuration);
+        var snapshot = RuleEngine.ClassificationSnapshot(ClassificationConfig(State.Configuration));
         var before = files.Select(f => State.Assignments.GetValueOrDefault(f.Path)).ToArray();
         var changes = await Task.Run(() => Changes(files, snapshot, before, cancellation), cancellation);
         cancellation.ThrowIfCancellationRequested();
@@ -139,7 +144,23 @@ public sealed class Organizer(StateStore store, AppState state)
         return true;
     }
 
-    private List<AssignmentChange> CalculateChanges() => Changes(Files, State.Configuration,
+    private void SetDeferredTargets(ScanResult scan)
+    {
+        deferredTargets = (scan.DeferredTargets ?? []).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in deferredAssignments.Keys.Where(p => !deferredTargets.Contains(p)).ToArray()) deferredAssignments.Remove(path);
+        foreach (var path in deferredTargets)
+            if (!deferredAssignments.ContainsKey(path) && State.Assignments.TryGetValue(path, out var id)) deferredAssignments[path] = id;
+    }
+    private Configuration ClassificationConfig(Configuration config)
+    {
+        if (deferredTargets.Count == 0) return config;
+        var snapshot = RuleEngine.ClassificationSnapshot(config);
+        foreach (var path in deferredTargets)
+            if (!snapshot.Overrides.ContainsKey(path) && deferredAssignments.TryGetValue(path, out var assignment)
+                && snapshot.Collections.Any(c => c.Id == assignment)) snapshot.Overrides[path] = assignment;
+        return snapshot;
+    }
+    private List<AssignmentChange> CalculateChanges() => Changes(Files, ClassificationConfig(State.Configuration),
         Files.Select(f => State.Assignments.GetValueOrDefault(f.Path)).ToArray(), default);
     private static List<AssignmentChange> Changes(IReadOnlyList<DesktopFile> files, Configuration config, string?[] before, CancellationToken cancellation)
     {
@@ -151,7 +172,7 @@ public sealed class Organizer(StateStore store, AppState state)
 
     private void Reclassify()
     {
-        var classified = RuleEngine.ClassifyFiles(Files, State.Configuration, DateTime.UtcNow);
+        var classified = RuleEngine.ClassifyFiles(Files, ClassificationConfig(State.Configuration), DateTime.UtcNow);
         for (var i = 0; i < Files.Count; i++) State.Assignments[Files[i].Path] = classified[i];
     }
 
@@ -189,6 +210,23 @@ public sealed class Organizer(StateStore store, AppState state)
     }
 
     public void ApplyAiSuggestions(AiSnapshot snapshot, IReadOnlyList<AiSuggestion> selected, IReadOnlyList<Collection>? pendingCollections = null)
+        => ApplyAiSuggestionsValidated(snapshot, selected, pendingCollections,
+            DesktopScanner.Scan([], snapshot.Items.Where(i => selected.Any(s => s.ItemId == i.Id)).Select(i => i.File.Path)).Files);
+
+    public async Task ApplyAiSuggestionsAsync(AiSnapshot snapshot, IReadOnlyList<AiSuggestion> selected,
+        IReadOnlyList<Collection>? pendingCollections = null, Func<DesktopFile, ShortcutTarget?>? readShortcut = null, CancellationToken cancellation = default)
+    {
+        var revision = contentRevision; var original = State; var files = Files;
+        var suggestions = selected.ToArray(); var pending = pendingCollections?.ToArray();
+        var paths = snapshot.Items.Where(i => suggestions.Any(s => s.ItemId == i.Id)).Select(i => i.File.Path).ToArray();
+        var live = await Task.Run(() => DesktopScanner.Scan([], paths, readShortcut, cancellation), cancellation);
+        cancellation.ThrowIfCancellationRequested();
+        if (contentRevision != revision || !ReferenceEquals(State, original) || !ReferenceEquals(Files, files))
+            throw new InvalidOperationException("核对期间文件或规则已变化，请重新分析后应用。");
+        ApplyAiSuggestionsValidated(snapshot, suggestions, pending, live.Files);
+    }
+    private void ApplyAiSuggestionsValidated(AiSnapshot snapshot, IReadOnlyList<AiSuggestion> selected,
+        IReadOnlyList<Collection>? pendingCollections, IReadOnlyList<DesktopFile> live)
     {
         if (selected.Count == 0) throw new InvalidOperationException("请先勾选需要应用的建议。");
         if (selected.Select(s => s.ItemId).Distinct().Count() != selected.Count) throw new InvalidOperationException("建议包含重复文件。");
@@ -196,7 +234,6 @@ public sealed class Organizer(StateStore store, AppState state)
         var all = State.Configuration.Collections.Concat(pending).ToList();
         if (all.Select(c => c.Id).Distinct().Count() != all.Count || all.Select(c => c.Name.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count() != all.Count
             || pending.Any(c => string.IsNullOrWhiteSpace(c.Name) || c.Name.Length > 80 || c.MappedPath != null || c.Recent)) throw new InvalidOperationException("新分组名称或标识无效，可能已存在同名分组。");
-        var live = DesktopScanner.Scan([], snapshot.Items.Where(i => selected.Any(s => s.ItemId == i.Id)).Select(i => i.File.Path)).Files;
         var changes = selected.Select(s =>
         {
             var original = snapshot.Items.SingleOrDefault(f => f.Id == s.ItemId) ?? throw new InvalidOperationException("建议文件不在分析范围。");
@@ -237,7 +274,8 @@ public sealed class Organizer(StateStore store, AppState state)
         var saved = rule with { Conditions = [.. rule.Conditions] };
         if (index >= 0) next.Rules[index] = saved; else next.Rules.Insert(0, saved);
         var now = DateTime.UtcNow;
-        var classified = await Task.Run(() => RuleEngine.ClassifyFiles(files, next, now, cancellation), cancellation);
+        var classification = ClassificationConfig(next);
+        var classified = await Task.Run(() => RuleEngine.ClassifyFiles(files, classification, now, cancellation), cancellation);
         cancellation.ThrowIfCancellationRequested();
         if (contentRevision != revision || !ReferenceEquals(State, original) || !ReferenceEquals(Files, files))
             throw new InvalidOperationException("归类期间文件或规则已变化，请再次保存规则。");
@@ -311,7 +349,7 @@ public sealed class Organizer(StateStore store, AppState state)
     public void RestoreBackup()
     {
         var restored = store.RestoreBackup();
-        State = restored; Files = []; Warnings = [];
+        State = restored; Files = []; Warnings = []; deferredTargets.Clear(); deferredAssignments.Clear();
     }
     public void Undo()
     {

@@ -65,6 +65,7 @@ internal static class AiVerification
             var destination = Find<ComboBox>(dialog).Single(c => System.Windows.Automation.AutomationProperties.GetAutomationId(c) == "AiSuggestionTarget");
             destination.SelectedValue = "work";
             Click("应用勾选建议");
+            await Wait(() => changed == 1);
             Check(changed == 1 && organizer.CollectionOf(organizer.Files.Single()) == "work", "AI 下拉修改目标后实际按用户选择应用");
             Check(!Button("应用勾选建议").IsEnabled, "AI 应用后禁止重复提交同一批结果");
             organizer.Undo(); Check(organizer.CollectionOf(organizer.Files.Single()) == "inbox", "AI 实际界面应用后可撤销");

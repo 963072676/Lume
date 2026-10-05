@@ -31,7 +31,7 @@ internal static class PackageIsolation
     }
     internal static bool RelaunchIfNeeded(string[] args)
     {
-        if (args.Any(a => a is "--guard" or "--performance-self-test" or "--reliability-self-test" or "--menu-self-test" or "--icons-self-test" or "--features-self-test" or "--demo" or "--smoke" or "--desktop-smoke") || !IsPackaged) return false;
+        if (args.Any(a => a is "--guard" or "--performance-self-test" or "--reliability-self-test" or "--shell-worker-self-test" or "--menu-self-test" or "--icons-self-test" or "--features-self-test" or "--demo" or "--smoke" or "--desktop-smoke") || !IsPackaged) return false;
         var exe = Environment.ProcessPath ?? throw new IOException("无法定位 Lume。");
         if (!string.Equals(Path.GetFileName(exe), "Lume.exe", StringComparison.OrdinalIgnoreCase)) return false;
         var data = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Lume");

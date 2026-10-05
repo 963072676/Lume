@@ -38,7 +38,8 @@ public sealed partial class MainWindow : Window
     private readonly DispatcherTimer searchDelay = new() { Interval = TimeSpan.FromMilliseconds(140) };
     private readonly CancellationTokenSource lifetime = new();
     private DateTime refreshScheduledUtc;
-    private readonly DesktopScanSession scanner = new();
+    private readonly ShellWorkerClient shortcutWorker = new();
+    private readonly DesktopScanSession scanner;
     private readonly HashSet<string> dirtyRoots = new(StringComparer.OrdinalIgnoreCase);
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> pendingRoots = new(StringComparer.OrdinalIgnoreCase);
     private int pendingRefresh;
@@ -73,6 +74,14 @@ public sealed partial class MainWindow : Window
     public MainWindow(Organizer organizer, StateStore store, bool demo, bool smoke, RuntimeDiagnostics? diagnostics = null)
     {
         this.organizer = organizer; this.store = store; this.demo = demo; this.smoke = smoke; this.diagnostics = diagnostics;
+        var scanToken = lifetime.Token;
+        scanner = new((path, remaining) =>
+        {
+            var reply = shortcutWorker.SendAsync(new("shortcut", Path: path), scanToken,
+                remaining < ShellWorkerClient.RequestLimit ? remaining : ShellWorkerClient.RequestLimit).GetAwaiter().GetResult();
+            if (reply is not { Ok: true }) throw new TimeoutException("快捷目标读取未完成。");
+            return reply.Target;
+        });
         shellIconChanges = new ShellIconChanges();
         Style = (Style)Application.Current.FindResource(typeof(Window));
         Title = "Lume · 桌面整理" + (demo ? " — 隔离演示" : "");
@@ -117,7 +126,7 @@ public sealed partial class MainWindow : Window
 #endif
         };
         Closing += (_, e) => { if (Resident && !Exiting) { e.Cancel = true; Hide(); } };
-        Closed += (_, _) => { closed = true; lifetime.Cancel(); shellIconChanges.Dispose(); preview?.Close(); periodic.Stop(); debounce.Stop(); searchDelay.Stop(); foreach (var watcher in watchers) watcher.Dispose(); lifetime.Dispose(); };
+        Closed += (_, _) => { closed = true; lifetime.Cancel(); shortcutWorker.Dispose(); shellIconChanges.Dispose(); preview?.Close(); periodic.Stop(); debounce.Stop(); searchDelay.Stop(); foreach (var watcher in watchers) watcher.Dispose(); lifetime.Dispose(); };
     }
     public async Task StartMonitoringAsync() { if (monitoringStarted || closed) return; monitoringStarted = true; await RefreshAsync(); if (!closed) periodic.Start(); }
     public void ShowSettings() { Render(); Show(); WindowState = WindowState.Normal; Activate(); }
@@ -131,7 +140,7 @@ public sealed partial class MainWindow : Window
     public void OpenAiFromMenu(bool startAnalysis = true)
     {
         ShowSettings();
-        new AiAnalysisDialog(this, organizer, Path.GetDirectoryName(store.Path)!, () => Run(() => { }), startAnalysis: startAnalysis).ShowDialog();
+        new AiAnalysisDialog(this, organizer, Path.GetDirectoryName(store.Path)!, () => Run(() => { }), startAnalysis: startAnalysis, shortcutWorker: shortcutWorker).ShowDialog();
     }
     public void MapFolderFromMenu()
     {
@@ -383,7 +392,8 @@ public sealed partial class MainWindow : Window
                 var dirty = dirtyRoots.ToArray(); dirtyRoots.Clear();
                 ScanResult scan;
                 var scanClock = Stopwatch.StartNew();
-                try { scan = await Task.Run(() => scanner.Scan(roots, linked, dirty, full)); }
+                var scanToken = lifetime.Token;
+                try { scan = await Task.Run(() => scanner.Scan(roots, linked, dirty, full, scanToken, TimeSpan.FromSeconds(8)), scanToken); }
                 catch { fullScanRequested = true; throw; }
                 if (full) lastFullScanUtc = DateTime.UtcNow;
                 diagnostics?.Record(DiagnosticKind.Scan, scanClock.Elapsed.TotalMilliseconds, scan.Files.Count, scan.Warnings.Count, scanner.LastScannedDirectories);

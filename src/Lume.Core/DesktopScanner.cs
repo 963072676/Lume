@@ -1,20 +1,23 @@
 namespace Lume.Core;
 
-public sealed record ScanResult(List<DesktopFile> Files, List<string> Warnings);
+public sealed record ScanResult(List<DesktopFile> Files, List<string> Warnings, List<string>? DeferredTargets = null);
 
 public static class DesktopScanner
 {
-    public static ScanResult Scan(IEnumerable<string> roots, IEnumerable<string>? linkedFiles = null, Func<DesktopFile, ShortcutTarget?>? readShortcut = null)
+    public static ScanResult Scan(IEnumerable<string> roots, IEnumerable<string>? linkedFiles = null, Func<DesktopFile, ShortcutTarget?>? readShortcut = null,
+        CancellationToken cancellationToken = default)
     {
         var result = new Dictionary<string, DesktopFile>(StringComparer.OrdinalIgnoreCase);
         var warnings = new List<string>();
         foreach (var root in roots)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             try
             {
                 if (!Directory.Exists(root)) { warnings.Add($"目录不可访问：{root}"); continue; }
                 foreach (var path in Directory.EnumerateFileSystemEntries(root))
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     try
                     {
                         var info = new FileInfo(path);
@@ -33,6 +36,7 @@ public static class DesktopScanner
         }
         foreach (var path in linkedFiles ?? [])
         {
+            cancellationToken.ThrowIfCancellationRequested();
             try
             {
                 var info = new FileInfo(path);
@@ -43,7 +47,12 @@ public static class DesktopScanner
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { warnings.Add($"暂时无法读取：{path}"); }
         }
-        var files = result.Values.Select(f => f with { Target = f.IsDirectory ? null : readShortcut != null ? readShortcut(f) : ShortcutReader.Read(f.Path) }).ToList();
+        var files = new List<DesktopFile>(result.Count);
+        foreach (var file in result.Values)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            files.Add(file with { Target = file.IsDirectory ? null : readShortcut != null ? readShortcut(file) : ShortcutReader.Read(file.Path) });
+        }
         return new(MergeDesktopShortcuts(files, Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
             Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory)).OrderBy(f => f.Name, StringComparer.CurrentCultureIgnoreCase).ToList(), warnings);
     }

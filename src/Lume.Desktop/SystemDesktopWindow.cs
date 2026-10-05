@@ -293,74 +293,11 @@ internal sealed class SystemDesktopWindow : Window
         GlassApplied = NativeGlassApplied || backdrop.Background != null;
         tint.Background = Tokens.Alpha(Tokens.Glass, configured);
     }
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] private struct ShellInfo
-    { public IntPtr Icon; public int Index; public uint Attributes; [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string Display; [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)] public string Type; }
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode)] private static extern int SHParseDisplayName(string name, IntPtr context, out IntPtr pidl, uint attributes, out uint flags);
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr SHGetFileInfo(IntPtr pidl, uint attributes, ref ShellInfo info, uint size, uint flags);
-    [StructLayout(LayoutKind.Sequential)] private struct RecycleInfo
-    { public uint Size; public long Bytes; public long Count; }
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] private struct StockIconInfo
-    { public uint Size; public IntPtr Icon; public int SystemIndex; public int IconIndex; [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string Path; }
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode)] private static extern int SHQueryRecycleBinW(string? root, ref RecycleInfo info);
-    [DllImport("shell32.dll")] private static extern int SHGetStockIconInfo(int id, uint flags, ref StockIconInfo info);
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode)] private static extern uint ExtractIconExW(string file, int index, out IntPtr large, out IntPtr small, uint count);
-    [DllImport("user32.dll")] private static extern bool DestroyIcon(IntPtr icon);
-    internal static long? RecycleBinItemCount()
-    {
-        var info = new RecycleInfo { Size = (uint)Marshal.SizeOf<RecycleInfo>() };
-        return SHQueryRecycleBinW(null, ref info) == 0 ? info.Count : null;
-    }
+    internal static long? RecycleBinItemCount() => SystemIconReader.RecycleBinItemCount();
     internal static ShellIcons.SystemIconResult ReadSystemIcon(Entry entry)
     {
-        var count = entry.Id == RecycleBinId ? RecycleBinItemCount() : null;
-        return new(ReadIcon(entry, count.HasValue ? count.Value > 0 : null), count);
+        var result = SystemIconReader.ReadSystem(entry.Id);
+        return new(result.Icon ?? FallbackIcon, result.Count);
     }
-    private static BitmapSource NormalizeIcon(IntPtr icon) => IconArtwork.Normalize(Imaging.CreateBitmapSourceFromHIcon(icon, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions()), false);
-    private static ImageSource? ReadRecycleBinIcon(bool full)
-    {
-        // Desktop icon settings can supply custom empty/full resources.
-        var keyPath = @"Software\Microsoft\Windows\CurrentVersion\Explorer\CLSID\{" + RecycleBinId + @"}\DefaultIcon";
-        using var key = Registry.CurrentUser.OpenSubKey(keyPath);
-        var location = key?.GetValue(full ? "Full" : "Empty") as string;
-        if (!string.IsNullOrWhiteSpace(location))
-        {
-            var separator = location.LastIndexOf(',');
-            var parsed = 0;
-            var hasIndex = separator >= 0 && int.TryParse(location[(separator + 1)..].Trim(), out parsed);
-            var path = Environment.ExpandEnvironmentVariables((hasIndex ? location[..separator] : location).Trim().Trim('"'));
-            var index = hasIndex ? parsed : 0;
-            if (System.IO.File.Exists(path))
-            {
-                IntPtr large = IntPtr.Zero, small = IntPtr.Zero;
-                try
-                {
-                    if (ExtractIconExW(path, index, out large, out small, 1) > 0 && large != IntPtr.Zero) return NormalizeIcon(large);
-                }
-                finally { if (large != IntPtr.Zero) DestroyIcon(large); if (small != IntPtr.Zero) DestroyIcon(small); }
-            }
-        }
-        var info = new StockIconInfo { Size = (uint)Marshal.SizeOf<StockIconInfo>() };
-        try
-        {
-            if (SHGetStockIconInfo(full ? 32 : 31, 0x00000100, ref info) == 0 && info.Icon != IntPtr.Zero) return NormalizeIcon(info.Icon);
-        }
-        finally { if (info.Icon != IntPtr.Zero) DestroyIcon(info.Icon); }
-        return null;
-    }
-    internal static ImageSource ReadIcon(Entry entry, bool? recycleBinFull = null)
-    {
-        var pidl = IntPtr.Zero; var info = new ShellInfo();
-        try
-        {
-            if (entry.Id == RecycleBinId && recycleBinFull is { } full && ReadRecycleBinIcon(full) is { } recycleIcon)
-                return recycleIcon;
-            if (SHParseDisplayName("::{" + entry.Id + "}", IntPtr.Zero, out pidl, 0, out _) >= 0)
-            {
-                SHGetFileInfo(pidl, 0, ref info, (uint)Marshal.SizeOf<ShellInfo>(), 0x108);
-                if (info.Icon != IntPtr.Zero) return NormalizeIcon(info.Icon);
-            }
-            return FallbackIcon;
-        }
-        finally { if (info.Icon != IntPtr.Zero) DestroyIcon(info.Icon); if (pidl != IntPtr.Zero) Marshal.FreeCoTaskMem(pidl); }
-    }
+    internal static ImageSource ReadIcon(Entry entry, bool? recycleBinFull = null) => SystemIconReader.ReadIcon(entry.Id, recycleBinFull) ?? FallbackIcon;
 }
