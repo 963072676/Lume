@@ -79,11 +79,13 @@ internal static class FeatureVerification
                     { WindowStartupLocation = WindowStartupLocation.Manual, Left = -16000, Top = 0, ShowActivated = false };
                 ruleDialog.Show(); ruleDialog.UpdateLayout();
                 Find<Button>(ruleDialog).Single(b => b.Content as string == "预览匹配").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                for (var i = 0; i < 200 && !Find<TextBlock>(ruleDialog).Any(t => t.Text.Contains("条件命中 1 项 · 本规则生效 1 项")); i++) await Task.Delay(25);
                 Check(Find<TextBlock>(ruleDialog).Any(t => t.Text.Contains("条件命中 1 项 · 本规则生效 1 项")), "规则编辑器真实按钮预览多关键词命中");
                 var fieldBox = Find<ComboBox>(ruleDialog).Single(c => c.SelectedValue as string == "name");
                 fieldBox.SelectedValue = "targetPath";
                 Find<TextBox>(ruleDialog).Single(t => t.Text == "音乐,视频,剧,音").Text = "Game";
                 Find<Button>(ruleDialog).Single(b => b.Content as string == "预览匹配").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                for (var i = 0; i < 200 && !Find<TextBlock>(ruleDialog).Any(t => t.Text.Contains("条件命中 1 项") && t.Text.Contains(@"D:\Games\Player.exe")); i++) await Task.Delay(25);
                 Check(Find<TextBlock>(ruleDialog).Any(t => t.Text.Contains("条件命中 1 项") && t.Text.Contains(@"D:\Games\Player.exe")), "快捷目标字段切换与目标证据展示");
                 ruleDialog.UpdateLayout();
                 var ruleImage = new RenderTargetBitmap((int)ruleDialog.ActualWidth, (int)ruleDialog.ActualHeight, 96, 96, PixelFormats.Pbgra32); ruleImage.Render(ruleDialog);

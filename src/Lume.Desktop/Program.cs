@@ -18,6 +18,7 @@ public static class Program
         if (Environment.GetEnvironmentVariable("LUME_VERIFY_SOFTWARE_RENDERING") == "1")
             System.Windows.Media.RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
         if (args.Contains("--performance-self-test")) return MainWindow.RunPerformanceVerification(args);
+        if (args.Contains("--reliability-self-test")) return ReliabilityVerification.Run();
         if (args.Contains("--menu-self-test")) return DesktopMenuVerification.Run();
         if (args.Contains("--icons-self-test")) return IconVerification.Run();
         if (args.Contains("--features-self-test")) return FeatureVerification.Run(!args.Contains("--no-input"));
@@ -27,19 +28,31 @@ public static class Program
         if (args.Contains("--stop")) { if (EventWaitHandle.TryOpenExisting("Local\\Lume.Stop", out var stop)) { using (stop) stop.Set(); } return 0; }
         var desktopSmoke = args.Contains("--desktop-smoke");
         var demo = args.Contains("--demo") || args.Contains("--smoke") || desktopSmoke;
+        var restoreIndex = Array.IndexOf(args, "--restore-data");
+        if (restoreIndex >= 0)
+        {
+            try
+            {
+                if (restoreIndex + 1 >= args.Length || demo || args.Contains("--action")) throw new IOException("数据恢复参数无效。");
+                RuntimeIdentity.WaitForRestoreParent(args);
+            }
+            catch (Exception ex) { MessageBox.Show(ex.Message, "Lume 数据尚未恢复"); return 1; }
+        }
         string? requestedAction = null;
         var actionIndex = Array.IndexOf(args, "--action");
         if (actionIndex >= 0)
         {
             if (actionIndex + 1 >= args.Length || !DesktopMenu.IsCommand(args[actionIndex + 1])) return 2;
             requestedAction = args[actionIndex + 1];
-            if (DesktopCommandSignals.Send(requestedAction, demo)) return 0;
+            if (DesktopCommandSignals.Send(requestedAction, demo)) { if (!demo && requestedAction == "show") RuntimeIdentity.NoticeOtherInstance(); return 0; }
             if (requestedAction is "exit" or "pause") return 0;
         }
         var data = demo ? Path.Combine(AppContext.BaseDirectory, "demo-data") : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Lume");
         using var mutex = new Mutex(true, demo ? "Local\\Lume.Desktop.Demo" : "Local\\Lume.Desktop", out var first);
         if (!first)
         {
+            if (restoreIndex >= 0) { MessageBox.Show("仍有 Lume 实例在运行，数据未恢复。请退出后重试。", "恢复完整数据"); return 1; }
+            if (!demo && requestedAction == null) RuntimeIdentity.NoticeOtherInstance();
             if (requestedAction != null)
             {
                 for (var attempt = 0; attempt < 60; attempt++)
@@ -54,6 +67,7 @@ public static class Program
         }
         try
         {
+            var restoredBackup = restoreIndex >= 0 ? DataBackup.RestoreOffline(data, args[restoreIndex + 1]) : "";
             var roots = new[] { Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory) }.Where(Directory.Exists).ToList();
             if (demo)
             {
@@ -83,6 +97,12 @@ public static class Program
                 state = store.RestoreBackup();
             }
             var organizer = new Organizer(store, state);
+            if (!demo && state.Version == 1 && File.Exists(store.Path))
+            {
+                var backup = Path.Combine(RuntimeIdentity.BackupDirectory(data), "before-upgrade-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N") + ".lume-backup.zip");
+                _ = DataBackup.Export(data, backup, RuntimeIdentity.Version);
+                store.Save(state);
+            }
             var app = new Application();
             Tokens.ApplyTheme(organizer.State.Desktop.Theme);
             Ui.InstallStyles(app);
@@ -102,8 +122,20 @@ public static class Program
             using var commands = new DesktopCommandSignals(demo);
             app.ShutdownMode = ShutdownMode.OnExplicitShutdown; app.MainWindow = window; window.Resident = true;
             using var surface = new DesktopSurface(organizer, data, window.BuildFileTile, window.RefreshView, window.ShowSettings, id => window.OpenArchive(id));
+            window.ReadGuardDescription = () => surface.GuardDescription;
             window.IsDesktopPaused = () => surface.Paused;
             void Quit() { surface.Dispose(); window.Exiting = true; window.Close(); app.Shutdown(); }
+            window.RestoreDataRequested = archive =>
+            {
+                using var parent = Process.GetCurrentProcess();
+                var executable = Environment.ProcessPath ?? throw new IOException("无法确定程序路径。");
+                if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase)) throw new IOException("请在发布版本中恢复完整数据。");
+                var launch = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden };
+                launch.ArgumentList.Add("--restore-data"); launch.ArgumentList.Add(archive);
+                launch.ArgumentList.Add("--restore-wait"); launch.ArgumentList.Add(parent.Id.ToString()); launch.ArgumentList.Add(parent.StartTime.ToUniversalTime().Ticks.ToString());
+                using var child = Process.Start(launch) ?? throw new IOException("恢复进程未启动，当前数据保持原状。");
+                Quit();
+            };
             using var tray = new TrayService(window.ShowSettings, async () => await surface.ToggleAsync(), () => window.OpenArchive(), Quit);
             surface.Error += message => { diagnostics.Record(DiagnosticKind.SurfaceError); tray.Notify(message); }; window.DataChanged += surface.Refresh;
             Microsoft.Win32.PowerModeChangedEventHandler powerChanged = (_, e) =>
@@ -159,18 +191,23 @@ public static class Program
                 try
                 {
                     await Task.Run(() => window.Archives.RecoverAsync()); await window.StartMonitoringAsync(); await surface.StartAsync();
+                    window.GuardDescription = surface.GuardDescription;
                     signals.Start();
                     if (!demo)
                     {
                         try { if (organizer.State.Desktop.ContextMenuEnabled) DesktopMenu.Register(); else DesktopMenu.Unregister(); }
                         catch (Exception ex) { tray.Notify("桌面右键菜单未更新：" + ex.Message); }
+                        try { StartupRegistration.MigrateOwned(RuntimeIdentity.BackupDirectory(data)); }
+                        catch (Exception ex) { tray.Notify("开机启动未迁移：" + ex.Message); }
                     }
                     if (requestedAction != null) await DispatchAsync(requestedAction);
 #if VERIFICATION
                     if (desktopSmoke) { await DesktopVerification.RunAsync(surface, window, data, organizer); Quit(); }
                     else
 #endif
-                    tray.Notify("桌面分区已启用。双击托盘图标打开设置，右键可归档或退出恢复桌面。");
+                    tray.Notify(window.Archives.Warnings.Count > 0 ? "桌面分区已启用，归档记录有恢复提示，可在整理历史查看。"
+                        : restoredBackup.Length > 0 ? "完整数据已恢复，原数据保留在：" + restoredBackup
+                        : "桌面分区已启用。双击托盘图标打开设置，右键可归档或退出恢复桌面。");
                 }
                 catch (Exception ex)
                 {

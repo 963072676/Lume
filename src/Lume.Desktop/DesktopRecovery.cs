@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
+using System.Collections.Concurrent;
 
 namespace Lume.Desktop;
 
@@ -9,6 +10,8 @@ internal sealed record DesktopLease(long Icons, uint ExplorerPid, bool WasVisibl
 
 internal static class DesktopRecovery
 {
+    private sealed record CachedLease(DesktopLease Lease, DateTime WrittenUtc, DateTime CheckedUtc);
+    private static readonly ConcurrentDictionary<string, CachedLease> Leases = new(StringComparer.OrdinalIgnoreCase);
     public static Process LaunchGuard(Process parent, string leasePath)
     {
         var native = Path.Combine(AppContext.BaseDirectory, "Lume.Guard.exe");
@@ -43,6 +46,7 @@ internal static class DesktopRecovery
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(lease)); File.Move(path + ".tmp", path, true);
         SaveNativeLease(path, lease);
+        Leases[path] = new(lease, File.GetLastWriteTimeUtc(path), DateTime.UtcNow);
     }
     internal static void SaveNativeLease(string path, DesktopLease lease)
     {
@@ -68,26 +72,55 @@ internal static class DesktopRecovery
     }
     public static void Restore(string path)
     {
-        if (!File.Exists(path)) return;
-        var lease = JsonSerializer.Deserialize<DesktopLease>(File.ReadAllText(path));
+        DesktopLease? lease;
+        if (Leases.TryRemove(path, out var cached)) lease = cached.Lease;
+        else
+        {
+            if (!File.Exists(path)) return;
+            try { lease = JsonSerializer.Deserialize<DesktopLease>(File.ReadAllText(path)); }
+            catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException) { return; }
+        }
         if (lease != null)
         {
-            var icons = new IntPtr(lease.Icons); DesktopNative.GetWindowThreadProcessId(icons, out var pid);
-            if (pid == lease.ExplorerPid && DesktopNative.ClassName(icons) == "SysListView32") DesktopNative.ShowWindow(icons, lease.WasVisible ? 5 : 0);
+            var icons = new IntPtr(lease.Icons);
+            if (MatchesWindow(new(lease.Icons, lease.ExplorerPid, "SysListView32", lease.WasVisible))) DesktopNative.ShowWindow(icons, lease.WasVisible ? 5 : 0);
             foreach (var overlay in lease.Overlays ?? [])
             {
-                var handle = new IntPtr(overlay.Handle); DesktopNative.GetWindowThreadProcessId(handle, out var owner);
-                if (owner == overlay.Pid && DesktopNative.ClassName(handle) == overlay.ClassName) DesktopNative.ShowWindow(handle, overlay.WasVisible ? 5 : 0);
+                var handle = new IntPtr(overlay.Handle);
+                if (MatchesWindow(overlay)) DesktopNative.ShowWindow(handle, overlay.WasVisible ? 5 : 0);
             }
         }
         File.Delete(path);
         File.Delete(path + ".native");
     }
-    public static void HideManagedLayers(string path)
+    internal static bool MatchesWindow(OverlayLease? entry)
     {
-        var lease = JsonSerializer.Deserialize<DesktopLease>(File.ReadAllText(path))!;
-        DesktopNative.ShowWindow(new IntPtr(lease.Icons), 0);
-        foreach (var overlay in lease.Overlays ?? []) DesktopNative.ShowWindow(new IntPtr(overlay.Handle), 0);
+        if (entry == null) return false;
+        var window = new IntPtr(entry.Handle);
+        if (entry.Handle == 0 || entry.Pid == 0 || entry.ClassName is not ("SysListView32" or "TXMiniSkin") || !DesktopNative.IsWindow(window)) return false;
+        DesktopNative.GetWindowThreadProcessId(window, out var owner);
+        return owner == entry.Pid && DesktopNative.ClassName(window) == entry.ClassName;
+    }
+    public static bool HideManagedLayers(string path)
+    {
+        try
+        {
+            var now = DateTime.UtcNow;
+            if (!Leases.TryGetValue(path, out var cached) || now - cached.CheckedUtc >= TimeSpan.FromSeconds(5))
+            {
+                if (!File.Exists(path)) return false;
+                var written = File.GetLastWriteTimeUtc(path);
+                var value = cached != null && written == cached.WrittenUtc ? cached.Lease : JsonSerializer.Deserialize<DesktopLease>(File.ReadAllText(path));
+                if (value == null) return false;
+                cached = new(value, written, now); Leases[path] = cached;
+            }
+            var lease = cached.Lease;
+            if (!MatchesWindow(new(lease.Icons, lease.ExplorerPid, "SysListView32", lease.WasVisible))) return false;
+            DesktopNative.ShowWindow(new IntPtr(lease.Icons), 0);
+            foreach (var overlay in lease.Overlays ?? []) if (MatchesWindow(overlay)) DesktopNative.ShowWindow(new IntPtr(overlay.Handle), 0);
+            return true;
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException) { return false; }
     }
     public static int Guard(string[] args)
     {

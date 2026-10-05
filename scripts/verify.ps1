@@ -12,6 +12,7 @@ if (!$SkipBuild) { & (Join-Path $PSScriptRoot 'build.ps1') -DotnetPath $DotnetPa
 & $DotnetPath run --project (Join-Path $projectRoot 'tests/Lume.Recovery.Tests') -c Release -- (Join-Path $appDirectory 'Lume.Guard.exe') (Join-Path $evidence 'native-recovery')
 if ($LASTEXITCODE -ne 0) { throw '原生恢复保护验收失败。' }
 $stages = @(
+    @{ Flag='--reliability-self-test'; Result='reliability-verification/latest-result.json'; Name='reliability' },
     @{ Flag='--menu-self-test'; Result='menu-verification/result.json'; Name='menu' },
     @{ Flag='--icons-self-test'; Result='icons-verification/result.json'; Name='icons' },
     @{ Flag=$(if ($SkipInteractive) { '--features-self-test --no-input' } else { '--features-self-test' }); Result='features-verification/result.json'; Name='features' },

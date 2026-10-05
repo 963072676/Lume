@@ -26,6 +26,8 @@ internal sealed class RuleDialog : Window
     private readonly string? aiDirectory;
     private readonly TextBox aiPrompt = new() { MaxLength = 1000, ToolTip = "描述想归类的文件，例如：常见多媒体音视频文件" };
     private CancellationTokenSource? aiCancellation;
+    private CancellationTokenSource? previewCancellation;
+    private bool closed;
     private readonly StackPanel editor;
     private readonly StackPanel footerPanel;
     private readonly HttpMessageHandler? aiHandler;
@@ -65,7 +67,7 @@ internal sealed class RuleDialog : Window
         body.Children.Add(Ui.Text("包含 / 开头是：逗号或分号分隔多个关键词，命中任意一个即可，如 音乐,视频,剧,音。条件行之间仍须全部满足。\n快捷目标字段读取 .lnk / .url 指向的位置，例如目标路径包含 Game；网址支持 steam:// 等协议。目标不可访问时大小和应用信息不参与匹配。\n要匹配逗号本身，选择「包含原文」或正则。来源仅依据文件名和路径推测。", 11, Ui.Muted));
         panel.Children.Add(new ScrollViewer { Content = body }); Content = panel;
         foreach (var condition in rule?.Conditions ?? [new("extension", "in", "png,jpg")]) AddCondition(condition);
-        Closed += (_, _) => aiCancellation?.Cancel();
+        Closed += (_, _) => { closed = true; aiCancellation?.Cancel(); previewCancellation?.Cancel(); };
     }
 
     private void ReplaceConditions(List<Condition> values)
@@ -134,18 +136,33 @@ internal sealed class RuleDialog : Window
     private Rule Draft() => new(id, name.Text.Trim(), target.SelectedValue as string ?? "inbox",
         conditions.Select(c => new Condition(c.Field.SelectedValue as string ?? "", c.Operator.SelectedValue as string ?? "", c.Value())).ToList(), enabled.IsChecked == true);
 
-    private void UpdatePreview()
+    private async void UpdatePreview()
     {
+        previewCancellation?.Cancel();
         var rule = Draft(); var error = RuleEngine.Validate(rule, organizer.State.Configuration.Collections);
         if (error != null) { preview.Text = error; return; }
-        var matched = RuleEngine.Preview(organizer.Files, organizer.State.Configuration, rule, DateTime.UtcNow);
-        preview.Text = rule.Enabled
+        using var cancellation = new CancellationTokenSource(); previewCancellation = cancellation;
+        var files = organizer.Files; var snapshot = RuleEngine.ClassificationSnapshot(organizer.State.Configuration);
+        var now = DateTime.UtcNow; preview.Text = "正在计算匹配，关闭窗口可取消…";
+        try
+        {
+            var matched = await Task.Run(() => RuleEngine.Preview(files, snapshot, rule, now, cancellation.Token), cancellation.Token);
+            if (closed || cancellation.IsCancellationRequested) return;
+            var current = Draft();
+            if (current.Name != rule.Name || current.CollectionId != rule.CollectionId || current.Enabled != rule.Enabled || !current.Conditions.SequenceEqual(rule.Conditions))
+            { preview.Text = "条件已变化，请再次预览。"; return; }
+            string CollectionName(string collectionId) => snapshot.Collections.FirstOrDefault(c => c.Id == collectionId)?.Name ?? "临时收件箱";
+            preview.Text = rule.Enabled
             ? $"条件命中 {matched.Count} 项 · 本规则生效 {matched.Count(x => x.Applied)} 项 · 手动固定或优先规则影响 {matched.Count(x => !x.Applied)} 项\n"
-                + string.Join("\n", matched.Take(8).Select(x => $"{x.File.Name} → {organizer.CollectionName(x.CollectionId)}（{x.Reason}）"
+                + string.Join("\n", matched.Take(8).Select(x => $"{x.File.Name} → {CollectionName(x.CollectionId)}（{x.Reason}）"
                     + (x.File.Target is { } t ? $"\n  目标：{t.Path}" : "")))
             : "规则已停用，保存后不参与自动归类。";
-        if (rule.Conditions.Any(c => c.Field.StartsWith("target", StringComparison.Ordinal)))
-            preview.Text += $"\n扫描范围内已读取 {organizer.Files.Count(f => f.Target != null)} 个快捷方式目标。未读取到的目标不会误匹配。";
+            if (rule.Conditions.Any(c => c.Field.StartsWith("target", StringComparison.Ordinal)))
+                preview.Text += $"\n扫描范围内已读取 {files.Count(f => f.Target != null)} 个快捷方式目标。未读取到的目标不会误匹配。";
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { if (!closed && !cancellation.IsCancellationRequested) preview.Text = ex.Message; }
+        finally { if (ReferenceEquals(previewCancellation, cancellation)) previewCancellation = null; }
     }
     private void Save()
     {

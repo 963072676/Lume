@@ -35,6 +35,9 @@ public sealed partial class MainWindow : Window
     private readonly List<FileSystemWatcher> watchers = [];
     private readonly DispatcherTimer debounce = new() { Interval = TimeSpan.FromMilliseconds(500) };
     private readonly DispatcherTimer periodic = new() { Interval = TimeSpan.FromSeconds(30) };
+    private readonly DispatcherTimer searchDelay = new() { Interval = TimeSpan.FromMilliseconds(140) };
+    private readonly CancellationTokenSource lifetime = new();
+    private DateTime refreshScheduledUtc;
     private readonly DesktopScanSession scanner = new();
     private readonly HashSet<string> dirtyRoots = new(StringComparer.OrdinalIgnoreCase);
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> pendingRoots = new(StringComparer.OrdinalIgnoreCase);
@@ -85,7 +88,8 @@ public sealed partial class MainWindow : Window
         titleActions.HorizontalAlignment = HorizontalAlignment.Right; DockPanel.SetDock(titleActions, Dock.Right); titleRow.Children.Add(titleActions); titleRow.Children.Add(heading); top.Children.Add(titleRow);
         summary.Margin = new(0, 6, 0, 18); top.Children.Add(summary);
         BuildToolbar(); top.Children.Add(toolbar);
-        search.TextChanged += (_, _) => { filePage = 0; if (page is "桌面" or "收件箱" or "智能规则") Render(); };
+        search.TextChanged += (_, _) => { filePage = 0; if (page is "桌面" or "收件箱" or "智能规则") { searchDelay.Stop(); searchDelay.Start(); } };
+        searchDelay.Tick += (_, _) => { searchDelay.Stop(); if (!closed) Render(); };
         main.Children.Add(top);
         var bottom = new DockPanel { Margin = new(0, 14, 0, 0) }; DockPanel.SetDock(bottom, Dock.Bottom);
         shortcutHint.Text = "Ctrl+K 快速操作";
@@ -94,7 +98,7 @@ public sealed partial class MainWindow : Window
         status.ToolTip = "关闭窗口后继续在托盘运行";
         main.Children.Add(bottom); main.Children.Add(content); Content = layout;
 
-        debounce.Tick += async (_, _) => { debounce.Stop(); await RefreshAsync(false); };
+        debounce.Tick += async (_, _) => { debounce.Stop(); refreshScheduledUtc = default; await RefreshAsync(false); };
         periodic.Tick += async (_, _) => { diagnostics?.Heartbeat(); await RefreshAsync(false); };
         PreviewKeyDown += (_, e) =>
         {
@@ -113,9 +117,9 @@ public sealed partial class MainWindow : Window
 #endif
         };
         Closing += (_, e) => { if (Resident && !Exiting) { e.Cancel = true; Hide(); } };
-        Closed += (_, _) => { closed = true; shellIconChanges.Dispose(); preview?.Close(); periodic.Stop(); debounce.Stop(); foreach (var watcher in watchers) watcher.Dispose(); };
+        Closed += (_, _) => { closed = true; lifetime.Cancel(); shellIconChanges.Dispose(); preview?.Close(); periodic.Stop(); debounce.Stop(); searchDelay.Stop(); foreach (var watcher in watchers) watcher.Dispose(); lifetime.Dispose(); };
     }
-    public async Task StartMonitoringAsync() { if (monitoringStarted) return; monitoringStarted = true; await RefreshAsync(); periodic.Start(); }
+    public async Task StartMonitoringAsync() { if (monitoringStarted || closed) return; monitoringStarted = true; await RefreshAsync(); if (!closed) periodic.Start(); }
     public void ShowSettings() { Render(); Show(); WindowState = WindowState.Normal; Activate(); }
     public void RefreshView() { if (IsVisible || smoke) Render(); DataChanged?.Invoke(); _ = RefreshAsync(); }
     internal void RequestEnvironmentalRefresh() { fullScanRequested = true; ScheduleRefresh(); }
@@ -387,8 +391,11 @@ public sealed partial class MainWindow : Window
                 if (!roots.SequenceEqual(organizer.WatchRoots, StringComparer.OrdinalIgnoreCase) || !linked.SequenceEqual(organizer.State.Configuration.LinkedFiles, StringComparer.OrdinalIgnoreCase)) { refreshAgain = true; continue; }
                 var changed = !organizer.Files.SequenceEqual(scan.Files);
                 var ageRules = organizer.State.Configuration.Rules.Any(r => r.Enabled && r.Conditions.Any(c => c.Field is "createdDays" or "modifiedDays"));
-                var classified = organizer.ApplyScan(scan, changed || firstScan || ageRules); ConfigureWatchers();
-                if (changed || firstScan || classified)
+                var classified = await organizer.ApplyScanAsync(scan, force || changed || firstScan || ageRules, lifetime.Token);
+                if (closed) return;
+                if (classified == ScanApplyResult.Stale) { refreshAgain = true; continue; }
+                ConfigureWatchers();
+                if (changed || firstScan || classified == ScanApplyResult.Changed)
                 {
                     var renderClock = Stopwatch.StartNew();
                     firstScan = false; if (IsVisible || smoke) Render();
@@ -399,6 +406,13 @@ public sealed partial class MainWindow : Window
                 status.Text = problems.Count > 0 ? $"{problems.Count} 条提示 · {problems[0]}" : $"● 正在关注 {roots.Count} 个目录 · 上次同步 {DateTime.Now:HH:mm:ss}";
                 status.ToolTip = string.Join("\n", problems);
             } while (refreshAgain);
+        }
+        catch (OperationCanceledException) when (closed) { }
+        catch (TimeoutException ex)
+        {
+            if (closed) return;
+            diagnostics?.Record(DiagnosticKind.OperationFailed, error: ex);
+            ConfigureWatchers(); if (IsVisible || smoke) Render(); DataChanged?.Invoke(); status.Text = ex.Message;
         }
         catch (Exception ex) { ShowError(ex); }
         finally { refreshing = false; }
@@ -415,7 +429,7 @@ public sealed partial class MainWindow : Window
         {
             try
             {
-                var watcher = new FileSystemWatcher(root) { IncludeSubdirectories = false, NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.CreationTime | NotifyFilters.Size };
+                var watcher = new FileSystemWatcher(root) { IncludeSubdirectories = false, NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.CreationTime | NotifyFilters.Size | NotifyFilters.Attributes };
                 watcher.Created += OnFileChanged; watcher.Changed += OnFileChanged; watcher.Deleted += OnFileChanged; watcher.Renamed += OnFileChanged;
                 watcher.Error += (_, error) => Dispatcher.BeginInvoke(() => { diagnostics?.Record(DiagnosticKind.WatcherError, error: error.GetException()); rootsSignature = ""; ScheduleRefresh(); });
                 watcher.EnableRaisingEvents = true; watchers.Add(watcher);
@@ -438,7 +452,14 @@ public sealed partial class MainWindow : Window
             });
         }
     }
-    private void ScheduleRefresh() { if (!closed) { debounce.Stop(); debounce.Start(); } }
+    private void ScheduleRefresh()
+    {
+        if (closed) return;
+        var now = DateTime.UtcNow;
+        if (refreshScheduledUtc == default) refreshScheduledUtc = now;
+        if (debounce.IsEnabled && now - refreshScheduledUtc >= TimeSpan.FromSeconds(2)) return;
+        debounce.Stop(); debounce.Start();
+    }
 
     private void Render()
     {
@@ -481,10 +502,19 @@ public sealed partial class MainWindow : Window
         var name = Ui.Prompt(this, "新建分区", "给这个分区起个名字");
         if (name != null) Run(() => organizer.AddCollection(name));
     }
-    private void EditRule(Rule? rule = null)
+    private async void EditRule(Rule? rule = null)
     {
         var dialog = new RuleDialog(this, organizer, rule, Path.GetDirectoryName(store.Path)!);
-        if (dialog.ShowDialog() == true && dialog.Result != null) Run(() => organizer.SaveRule(dialog.Result));
+        if (dialog.ShowDialog() != true || dialog.Result == null) return;
+        status.Text = "正在保存并计算规则…";
+        try
+        {
+            await organizer.SaveRuleAsync(dialog.Result, lifetime.Token);
+            if (closed) return;
+            Render(); DataChanged?.Invoke(); status.Text = "规则已保存 · 可在整理历史中撤销";
+        }
+        catch (OperationCanceledException) when (closed) { }
+        catch (Exception ex) { if (!closed) ShowError(ex); }
     }
 
 }

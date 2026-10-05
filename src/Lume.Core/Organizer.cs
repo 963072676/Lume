@@ -1,7 +1,10 @@
 namespace Lume.Core;
 
+public enum ScanApplyResult { Unchanged, Changed, Stale }
+
 public sealed class Organizer(StateStore store, AppState state)
 {
+    private long contentRevision;
     public AppState State { get; private set; } = state;
     public IReadOnlyList<DesktopFile> Files { get; private set; } = [];
     public IReadOnlyList<string> Warnings { get; private set; } = [];
@@ -34,7 +37,8 @@ public sealed class Organizer(StateStore store, AppState state)
         IEnumerable<DesktopFile> selected = collection.Recent ? Files.Where(f => !f.IsDirectory).OrderByDescending(f => f.ModifiedUtc).Take(40)
             : collection.MappedPath != null ? Files.Where(f => string.Equals(System.IO.Path.GetDirectoryName(f.Path), collection.MappedPath, StringComparison.OrdinalIgnoreCase))
             : Files.Where(f => CollectionOf(f) == id && (State.Configuration.Overrides.ContainsKey(f.Path) || !State.Configuration.Collections.Any(c => c.MappedPath != null && string.Equals(System.IO.Path.GetDirectoryName(f.Path), c.MappedPath, StringComparison.OrdinalIgnoreCase))));
-        selected = selected.Where(f => RuleEngine.Search(f, query));
+        var terms = RuleEngine.SearchTerms(query);
+        if (terms.Length > 0) selected = selected.Where(f => RuleEngine.Search(f, terms));
         if (collection.Recent) return selected.ToList();
         if (options.Sort == "manual")
         {
@@ -98,7 +102,7 @@ public sealed class Organizer(StateStore store, AppState state)
     private void Transaction(Action mutation)
     {
         var previous = StateStore.RollbackCopy(State);
-        try { mutation(); store.Save(State); }
+        try { mutation(); store.Save(State); contentRevision++; }
         catch { State = previous; StateStore.Normalize(State); throw; }
     }
 
@@ -108,6 +112,24 @@ public sealed class Organizer(StateStore store, AppState state)
         Warnings = scan.Warnings;
         if (!reclassify) return false;
         var changes = CalculateChanges();
+        return CommitScanChanges(changes);
+    }
+
+    public async Task<ScanApplyResult> ApplyScanAsync(ScanResult scan, bool reclassify = true, CancellationToken cancellation = default)
+    {
+        Files = scan.Files; Warnings = scan.Warnings;
+        if (!reclassify) return ScanApplyResult.Unchanged;
+        var revision = contentRevision; var original = State; var files = Files;
+        var snapshot = RuleEngine.ClassificationSnapshot(State.Configuration);
+        var before = files.Select(f => State.Assignments.GetValueOrDefault(f.Path)).ToArray();
+        var changes = await Task.Run(() => Changes(files, snapshot, before, cancellation), cancellation);
+        cancellation.ThrowIfCancellationRequested();
+        if (contentRevision != revision || !ReferenceEquals(State, original) || !ReferenceEquals(Files, files)) return ScanApplyResult.Stale;
+        return CommitScanChanges(changes) ? ScanApplyResult.Changed : ScanApplyResult.Unchanged;
+    }
+
+    private bool CommitScanChanges(List<AssignmentChange> changes)
+    {
         if (changes.Count == 0) return false;
         Transaction(() =>
         {
@@ -117,13 +139,20 @@ public sealed class Organizer(StateStore store, AppState state)
         return true;
     }
 
-    private List<AssignmentChange> CalculateChanges() => Files.Select(f => new AssignmentChange(f.Path,
-        State.Assignments.GetValueOrDefault(f.Path), RuleEngine.Classify(f, State.Configuration, DateTime.UtcNow)))
-        .Where(c => c.Before != c.After).ToList();
+    private List<AssignmentChange> CalculateChanges() => Changes(Files, State.Configuration,
+        Files.Select(f => State.Assignments.GetValueOrDefault(f.Path)).ToArray(), default);
+    private static List<AssignmentChange> Changes(IReadOnlyList<DesktopFile> files, Configuration config, string?[] before, CancellationToken cancellation)
+    {
+        var classified = RuleEngine.ClassifyFiles(files, config, DateTime.UtcNow, cancellation);
+        var changes = new List<AssignmentChange>();
+        for (var i = 0; i < files.Count; i++) if (before[i] != classified[i]) changes.Add(new(files[i].Path, before[i], classified[i]));
+        return changes;
+    }
 
     private void Reclassify()
     {
-        foreach (var f in Files) State.Assignments[f.Path] = RuleEngine.Classify(f, State.Configuration, DateTime.UtcNow);
+        var classified = RuleEngine.ClassifyFiles(Files, State.Configuration, DateTime.UtcNow);
+        for (var i = 0; i < Files.Count; i++) State.Assignments[Files[i].Path] = classified[i];
     }
 
     private void Edit(string title, Action<Configuration> edit, string detail = "") => Transaction(() =>
@@ -195,6 +224,28 @@ public sealed class Organizer(StateStore store, AppState state)
         {
             var index = c.Rules.FindIndex(r => r.Id == rule.Id);
             if (index >= 0) c.Rules[index] = rule; else c.Rules.Insert(0, rule);
+        });
+    }
+
+    public async Task SaveRuleAsync(Rule rule, CancellationToken cancellation = default)
+    {
+        var error = RuleEngine.Validate(rule, State.Configuration.Collections);
+        if (error != null) throw new InvalidOperationException(error);
+        var revision = contentRevision; var original = State; var files = Files;
+        var next = StateStore.Clone(State.Configuration);
+        var index = next.Rules.FindIndex(r => r.Id == rule.Id);
+        var saved = rule with { Conditions = [.. rule.Conditions] };
+        if (index >= 0) next.Rules[index] = saved; else next.Rules.Insert(0, saved);
+        var now = DateTime.UtcNow;
+        var classified = await Task.Run(() => RuleEngine.ClassifyFiles(files, next, now, cancellation), cancellation);
+        cancellation.ThrowIfCancellationRequested();
+        if (contentRevision != revision || !ReferenceEquals(State, original) || !ReferenceEquals(Files, files))
+            throw new InvalidOperationException("归类期间文件或规则已变化，请再次保存规则。");
+        Transaction(() =>
+        {
+            var previous = StateStore.Clone(State.Configuration); State.Configuration = next;
+            for (var i = 0; i < files.Count; i++) State.Assignments[files[i].Path] = classified[i];
+            State.History.Add(new() { Title = $"保存规则「{rule.Name}」", PreviousConfiguration = previous });
         });
     }
     public void DeleteRule(string id) => Edit("删除规则", c => c.Rules.RemoveAll(r => r.Id == id));

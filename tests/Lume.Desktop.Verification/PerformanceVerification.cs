@@ -34,6 +34,17 @@ public sealed partial class MainWindow
                     if (!ok()) throw new TimeoutException("界面监控未在预期时间收敛");
                 }
                 window.Show(); await Until(() => organizer.Files.Count == 1 && !window.refreshing);
+                var firstFile = Path.Combine(fixture, "first.txt");
+                File.SetAttributes(firstFile, FileAttributes.Hidden); await Until(() => organizer.Files.Count == 0 && !window.refreshing);
+                Check(organizer.Files.Count == 0, "隐藏属性变化触发实时扫描并移出可见列表");
+                File.SetAttributes(firstFile, FileAttributes.Normal); await Until(() => organizer.Files.Count == 1 && !window.refreshing);
+                Check(organizer.Files.Count == 1, "取消隐藏属性后文件实时恢复");
+                var beforeSearch = window.content.Content;
+                window.search.Text = "missing"; window.search.Text = "first"; window.search.Text = "txt";
+                Check(ReferenceEquals(beforeSearch, window.content.Content), "连续搜索输入延迟合并而不逐次重建页面");
+                await Until(() => !ReferenceEquals(beforeSearch, window.content.Content));
+                Check(window.boardSelection.Model.Visible.Count == 1, "合并搜索采用最后一次输入");
+                window.search.Clear(); await Until(() => !window.searchDelay.IsEnabled);
                 using (var command = new AutoResetEvent(false))
                 {
                     var delivered = 0; var complete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

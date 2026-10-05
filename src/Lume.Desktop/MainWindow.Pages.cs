@@ -70,7 +70,10 @@ public sealed partial class MainWindow
         {
             try
             {
-                foreach (var batch in Archives.History().Take(30))
+                var batches = Archives.History();
+                foreach (var warning in Archives.Warnings)
+                    panel.Children.Add(Ui.Text(warning.Message, Tokens.Secondary, Ui.Muted));
+                foreach (var batch in batches.Take(30))
                 {
                     hasPhysicalHistory = true;
                     var restore = Ui.Button("恢复到原位置（同名不覆盖）", async () =>

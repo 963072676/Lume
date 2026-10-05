@@ -34,10 +34,12 @@ public sealed partial class MainWindow
             DataChanged += Changed;
             Navigate("收件箱"); boardSelection.SelectAll();
             Check(boardSelection.Model.Selected.All(p => organizer.State.Assignments[p] == "inbox"), "收件箱全选只包含收件箱");
-            search.Text = "不存在的关键词"; Check(boardSelection.Model.Selected.Count == 0, "筛选自动清除不可见选择");
+            search.Text = "不存在的关键词";
+            for (var i = 0; i < 100 && searchDelay.IsEnabled; i++) await Task.Delay(25);
+            Check(!searchDelay.IsEnabled && boardSelection.Model.Selected.Count == 0, "筛选自动清除不可见选择");
             Capture(Path.Combine(folder, "empty.png"));
             Navigate("设置"); Render(); Render();
-            foreach (var section in new[] { "常规", "外观", "分区", "目录", "AI 与数据" })
+            foreach (var section in new[] { "常规", "外观", "分区", "目录", "AI 与数据", "关于" })
             {
                 settingsSection = section; RenderSettingsSection(); UpdateLayout();
                 Capture(Path.Combine(folder, "settings-" + section + ".png"));

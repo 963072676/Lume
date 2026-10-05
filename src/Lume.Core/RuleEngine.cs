@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 
 namespace Lume.Core;
@@ -44,74 +46,195 @@ public static class RuleEngine
     public static HashSet<string> SplitExtensions(string value) => value.Split([',', '，', ';', '；', ' '], StringSplitOptions.RemoveEmptyEntries)
         .Select(x => x.Trim().TrimStart('.').ToLowerInvariant()).Where(x => x.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-    public static bool Matches(DesktopFile file, Rule rule, DateTime nowUtc) => rule.Enabled && rule.Conditions.Count > 0 && rule.Conditions.All(c => Match(file, c, nowUtc));
-
-    private static bool Match(DesktopFile f, Condition c, DateTime now)
+    private static readonly ConditionalWeakTable<Rule, PreparedRule> Prepared = new();
+    private sealed class PreparedRule(Rule rule)
     {
-        if (c.Field == "extension") return !f.IsDirectory && SplitExtensions(c.Value).Contains(f.Extension.TrimStart('.'));
-        if (c.Field == "targetExtension") return f.Target is { Extension.Length: > 0 } t && t.Kind != "folder" && SplitExtensions(c.Value).Contains(t.Extension.TrimStart('.'));
-        if (c.Field == "targetKind") return f.Target != null && c.Value == f.Target.Kind;
-        if (c.Field == "source") return f.Source.Equals(c.Value, StringComparison.OrdinalIgnoreCase);
-        if (c.Field == "kind") return c.Value == (f.IsDirectory ? "folder" : "file");
-        if (IsTextField(c.Field))
+        private PreparedCondition[] conditions = rule.Conditions.Select(c => new PreparedCondition(c)).ToArray();
+        public bool Matches(DesktopFile file, DateTime now, Action? check = null)
         {
-            var text = c.Field switch
+            // Rule lists can be edited in place by callers; never reuse stale conditions.
+            var changed = conditions.Length != rule.Conditions.Count;
+            for (var i = 0; !changed && i < conditions.Length; i++) changed = conditions[i].Source != rule.Conditions[i];
+            if (changed)
+                conditions = rule.Conditions.Select(c => new PreparedCondition(c)).ToArray();
+            if (conditions.Length == 0) return false;
+            foreach (var condition in conditions)
             {
-                "name" => f.Name, "path" => f.Path,
-                "targetName" => f.Target?.Name, "targetPath" => f.Target?.Path,
-                "targetDescription" => f.Target?.Description, "targetProduct" => f.Target?.Product,
-                "targetCompany" => f.Target?.Company, _ => null
-            };
-            if (string.IsNullOrEmpty(text)) return false;
-            try
-            {
-                return c.Operator switch
-                {
-                    "contains" => SplitKeywords(c.Value).Any(v => text.Contains(v, StringComparison.OrdinalIgnoreCase)),
-                    "starts" => SplitKeywords(c.Value).Any(v => text.StartsWith(v, StringComparison.OrdinalIgnoreCase)),
-                    "literal" => text.Contains(c.Value, StringComparison.OrdinalIgnoreCase),
-                    "regex" => Regex.IsMatch(text, c.Value, RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(50)),
-                    _ => false
-                };
+                check?.Invoke();
+                var matched = condition.Match(file, now);
+                check?.Invoke();
+                if (!matched) return false;
             }
-            catch (RegexMatchTimeoutException) { return false; }
-            catch (ArgumentException) { return false; }
+            return true;
         }
-        if (!double.TryParse(c.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var threshold)) return false;
-        var number = c.Field switch
+    }
+    private sealed class PreparedCondition
+    {
+        public Condition Source { get; }
+        private readonly HashSet<string>? extensions;
+        private readonly string[] keywords = [];
+        private readonly Regex? regex;
+        private readonly double threshold = double.NaN;
+        public PreparedCondition(Condition source)
         {
-            "createdDays" => Math.Max(0, (now - f.CreatedUtc).TotalDays),
-            "modifiedDays" => Math.Max(0, (now - f.ModifiedUtc).TotalDays),
-            "sizeMb" => f.Size / 1048576.0,
-            "targetSizeMb" => f.Target?.Size / 1048576.0 ?? double.NaN,
-            _ => double.NaN
-        };
-        return c.Operator == "lt" ? number < threshold : c.Operator == "gt" && number > threshold;
+            Source = source;
+            if (source.Field is "extension" or "targetExtension") extensions = SplitExtensions(source.Value);
+            else if (IsTextField(source.Field))
+            {
+                if (source.Operator is "contains" or "starts") keywords = SplitKeywords(source.Value);
+                if (source.Operator == "regex")
+                {
+                    try
+                    {
+                        try { regex = new(source.Value, RegexOptions.IgnoreCase | RegexOptions.NonBacktracking, TimeSpan.FromMilliseconds(50)); }
+                        catch (NotSupportedException) { regex = new(source.Value, RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(50)); }
+                    }
+                    catch (ArgumentException) { }
+                }
+            }
+            else if (double.TryParse(source.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var number)) threshold = number;
+        }
+        public bool Match(DesktopFile f, DateTime now)
+        {
+            var c = Source;
+            if (c.Field == "extension") return !f.IsDirectory && extensions!.GetAlternateLookup<ReadOnlySpan<char>>().Contains(f.Extension.AsSpan().TrimStart('.'));
+            if (c.Field == "targetExtension") return f.Target is { Extension.Length: > 0 } t && t.Kind != "folder" && extensions!.GetAlternateLookup<ReadOnlySpan<char>>().Contains(t.Extension.AsSpan().TrimStart('.'));
+            if (c.Field == "targetKind") return f.Target != null && c.Value == f.Target.Kind;
+            if (c.Field == "source") return f.Source.Equals(c.Value, StringComparison.OrdinalIgnoreCase);
+            if (c.Field == "kind") return c.Value == (f.IsDirectory ? "folder" : "file");
+            if (IsTextField(c.Field))
+            {
+                var text = c.Field switch
+                {
+                    "name" => f.Name, "path" => f.Path,
+                    "targetName" => f.Target?.Name, "targetPath" => f.Target?.Path,
+                    "targetDescription" => f.Target?.Description, "targetProduct" => f.Target?.Product,
+                    "targetCompany" => f.Target?.Company, _ => null
+                };
+                if (string.IsNullOrEmpty(text)) return false;
+                try
+                {
+                    return c.Operator switch
+                    {
+                        "contains" => KeywordsMatch(text, false),
+                        "starts" => KeywordsMatch(text, true),
+                        "literal" => text.Contains(c.Value, StringComparison.OrdinalIgnoreCase),
+                        "regex" => regex?.IsMatch(text) == true,
+                        _ => false
+                    };
+                }
+                catch (RegexMatchTimeoutException) { return false; }
+                catch (ArgumentException) { return false; }
+            }
+            if (double.IsNaN(threshold)) return false;
+            var number = c.Field switch
+            {
+                "createdDays" => Math.Max(0, (now - f.CreatedUtc).TotalDays),
+                "modifiedDays" => Math.Max(0, (now - f.ModifiedUtc).TotalDays),
+                "sizeMb" => f.Size / 1048576.0,
+                "targetSizeMb" => f.Target?.Size / 1048576.0 ?? double.NaN,
+                _ => double.NaN
+            };
+            return c.Operator == "lt" ? number < threshold : c.Operator == "gt" && number > threshold;
+        }
+        private bool KeywordsMatch(string text, bool starts)
+        {
+            foreach (var keyword in keywords)
+                if (starts ? text.StartsWith(keyword, StringComparison.OrdinalIgnoreCase) : text.Contains(keyword, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+    }
+
+    public static bool Matches(DesktopFile file, Rule rule, DateTime nowUtc) => rule.Enabled && Prepared.GetValue(rule, static r => new(r)).Matches(file, nowUtc);
+
+    private static bool HasCollection(Configuration config, string id)
+    {
+        foreach (var collection in config.Collections) if (collection.Id == id) return true;
+        return false;
     }
 
     public static string Classify(DesktopFile file, Configuration config, DateTime now)
     {
-        if (config.Overrides.TryGetValue(file.Path, out var pinned) && config.Collections.Any(c => c.Id == pinned)) return pinned;
-        return config.Rules.FirstOrDefault(r => config.Collections.Any(c => c.Id == r.CollectionId) && Matches(file, r, now))?.CollectionId ?? "inbox";
+        if (config.Overrides.TryGetValue(file.Path, out var pinned) && HasCollection(config, pinned)) return pinned;
+        foreach (var rule in config.Rules) if (HasCollection(config, rule.CollectionId) && Matches(file, rule, now)) return rule.CollectionId;
+        return "inbox";
+    }
+
+    public static Configuration ClassificationSnapshot(Configuration config) => new()
+    {
+        Collections = [.. config.Collections],
+        Rules = config.Rules.Select(r => r with { Conditions = [.. r.Conditions] }).ToList(),
+        Overrides = new(config.Overrides, StringComparer.OrdinalIgnoreCase)
+    };
+
+    private sealed class WorkLimit(CancellationToken cancellation, TimeSpan? budget)
+    {
+        private readonly Stopwatch clock = Stopwatch.StartNew();
+        private readonly TimeSpan maximum = budget ?? TimeSpan.FromSeconds(2);
+        public void Check()
+        {
+            cancellation.ThrowIfCancellationRequested();
+            if (clock.Elapsed > maximum) throw new TimeoutException("规则计算超过时间限制，未应用归类。请简化复杂正则或减少规则后重试。");
+        }
+    }
+
+    public static string[] ClassifyFiles(IReadOnlyList<DesktopFile> files, Configuration snapshot, DateTime now,
+        CancellationToken cancellation = default, TimeSpan? budget = null)
+    {
+        var limit = new WorkLimit(cancellation, budget); Action check = limit.Check; check();
+        var targets = snapshot.Collections.Select(c => c.Id).ToHashSet(StringComparer.Ordinal);
+        var rules = snapshot.Rules.Where(r => r.Enabled && targets.Contains(r.CollectionId))
+            .Select(r => { check(); return (r.CollectionId, Prepared: new PreparedRule(r)); }).ToArray();
+        var results = new string[files.Count];
+        for (var i = 0; i < files.Count; i++)
+        {
+            check();
+            var file = files[i];
+            if (snapshot.Overrides.TryGetValue(file.Path, out var pinned) && targets.Contains(pinned)) { results[i] = pinned; continue; }
+            results[i] = "inbox";
+            foreach (var rule in rules) if (rule.Prepared.Matches(file, now, check)) { results[i] = rule.CollectionId; break; }
+        }
+        check();
+        return results;
     }
 
     public sealed record PreviewItem(DesktopFile File, string CollectionId, string Reason, bool Applied);
 
-    public static List<PreviewItem> Preview(IEnumerable<DesktopFile> files, Configuration config, Rule draft, DateTime now)
+    public static List<PreviewItem> Preview(IEnumerable<DesktopFile> files, Configuration config, Rule draft, DateTime now,
+        CancellationToken cancellation = default, TimeSpan? budget = null)
     {
+        var limit = new WorkLimit(cancellation, budget); Action check = limit.Check; check();
+        if (!draft.Enabled) return [];
         var rules = config.Rules.ToList();
         var index = rules.FindIndex(r => r.Id == draft.Id);
         if (index < 0) rules.Insert(0, draft); else rules[index] = draft;
-        return files.Where(f => Matches(f, draft, now)).Select(f =>
+        var targets = config.Collections.Select(c => c.Id).ToHashSet(StringComparer.Ordinal);
+        var prepared = rules.Where(r => r.Enabled && targets.Contains(r.CollectionId))
+            .Select(r => { check(); return (Rule: r, Prepared: new PreparedRule(r)); }).ToArray();
+        var previewRule = new PreparedRule(draft);
+        var results = new List<PreviewItem>();
+        foreach (var file in files)
         {
-            if (config.Overrides.TryGetValue(f.Path, out var pinned) && config.Collections.Any(c => c.Id == pinned))
-                return new PreviewItem(f, pinned, "手动固定", false);
-            var winner = rules.First(r => config.Collections.Any(c => c.Id == r.CollectionId) && Matches(f, r, now));
-            return new PreviewItem(f, winner.CollectionId, winner.Id == draft.Id ? "本规则生效" : $"优先规则：{winner.Name}", winner.Id == draft.Id);
-        }).ToList();
+            check();
+            if (!previewRule.Matches(file, now, check)) continue;
+            if (config.Overrides.TryGetValue(file.Path, out var pinned) && targets.Contains(pinned))
+                results.Add(new(file, pinned, "手动固定", false));
+            else
+            {
+                var winner = prepared.First(r => r.Prepared.Matches(file, now, check)).Rule;
+                results.Add(new(file, winner.CollectionId, winner.Id == draft.Id ? "本规则生效" : $"优先规则：{winner.Name}", winner.Id == draft.Id));
+            }
+        }
+        check(); return results;
     }
 
-    public static bool Search(DesktopFile file, string query) => query.Split(' ', StringSplitOptions.RemoveEmptyEntries)
-        .All(term => file.Name.Contains(term, StringComparison.OrdinalIgnoreCase) || file.Source.Contains(term, StringComparison.OrdinalIgnoreCase)
-            || (term == "文件夹" && file.IsDirectory));
+    public static string[] SearchTerms(string query) => query.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+    public static bool Search(DesktopFile file, string query) => query.Length == 0 || Search(file, SearchTerms(query));
+    public static bool Search(DesktopFile file, IReadOnlyList<string> terms)
+    {
+        for (var i = 0; i < terms.Count; i++)
+            if (!file.Name.Contains(terms[i], StringComparison.OrdinalIgnoreCase) && !file.Source.Contains(terms[i], StringComparison.OrdinalIgnoreCase)
+                && !(terms[i] == "文件夹" && file.IsDirectory)) return false;
+        return true;
+    }
 }

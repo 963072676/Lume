@@ -32,6 +32,15 @@ internal sealed class DesktopSurface : IDisposable
     internal SystemDesktopWindow? SystemEntries => systemEntries;
     internal int VisibleGuideCount => guides.VisibleCount;
     public bool Paused => paused;
+    internal string GuardDescription
+    {
+        get
+        {
+            try { return guard == null || guard.HasExited ? "未运行" : string.Equals(Path.GetFileName(guard.MainModule?.FileName), "Lume.Guard.exe", StringComparison.OrdinalIgnoreCase) ? "原生恢复守护" : "兼容模式：托管恢复守护"; }
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { return "状态暂不可读取"; }
+        }
+    }
+    private string DisplaySignature() => string.Join("|", Forms.Screen.AllScreens.Select(s => s.DeviceName + s.Bounds + s.WorkingArea)) + ":" + DesktopNative.GetDpiForWindow(view);
     internal void RequestRebuild() { displaySignature = ""; }
     public bool Attached => !paused && cards.Count > 0 && cards.All(c => DesktopNative.GetParent(c.Handle) == view && DesktopNative.IsWindowVisible(c.Handle));
     public DesktopSurface(Organizer organizer, string dataDirectory, Func<DesktopFile, TileSelection, UIElement> tile, Action refresh, Action settings, Action<string> archive)
@@ -42,9 +51,10 @@ internal sealed class DesktopSurface : IDisposable
         {
             if (paused || disposed || rebuilding) return;
             if (guard?.HasExited == true) { paused = true; CloseCards(); DesktopRecovery.Restore(leasePath); Error?.Invoke("恢复保护进程已退出，已暂停分区并恢复原桌面。"); return; }
-            var displays = string.Join("|", Forms.Screen.AllScreens.Select(s => s.Bounds.ToString()));
-            if (!DesktopNative.IsWindow(view) || cards.Any(c => !DesktopNative.IsWindow(c.Handle)) || displays != displaySignature) await RebuildAsync();
-            else if (File.Exists(leasePath)) DesktopRecovery.HideManagedLayers(leasePath);
+            var displays = DisplaySignature();
+            if (!DesktopNative.IsWindow(view) || !DesktopNative.IsWindow(icons) || DesktopNative.GetParent(icons) != view
+                || cards.Any(c => !DesktopNative.IsWindow(c.Handle) || DesktopNative.GetParent(c.Handle) != view)
+                || displays != displaySignature || !DesktopRecovery.HideManagedLayers(leasePath)) await RebuildAsync();
             RefreshSystemEntries();
         };
     }
@@ -68,11 +78,11 @@ internal sealed class DesktopSurface : IDisposable
             (view, icons) = DesktopNative.FindDesktop();
             if (view == IntPtr.Zero || icons == IntPtr.Zero) throw new IOException("暂时找不到 Windows 桌面图标层，等待资源管理器恢复。");
             DesktopRecovery.SaveLease(leasePath, icons);
-            displaySignature = string.Join("|", Forms.Screen.AllScreens.Select(s => s.Bounds.ToString()));
+            displaySignature = DisplaySignature();
             CreateCards();
             await Task.Delay(120);
             if (cards.Any(c => DesktopNative.GetParent(c.Handle) != view)) throw new IOException("桌面分区挂载校验失败。");
-            DesktopRecovery.HideManagedLayers(leasePath);
+            if (!DesktopRecovery.HideManagedLayers(leasePath)) throw new IOException("桌面图层身份已变化，已恢复原桌面并等待重试。");
         }
         catch (Exception ex) { CloseCards(); DesktopRecovery.Restore(leasePath); view = IntPtr.Zero; Error?.Invoke(ex.Message); }
         finally { rebuilding = false; }

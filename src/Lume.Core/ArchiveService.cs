@@ -23,11 +23,14 @@ public sealed class ArchiveBatch
     public List<ArchiveItem> Items { get; set; } = [];
 }
 
+public sealed record ArchiveWarning(string JournalId, string Kind, string Message);
+
 /// <summary>物理操作使用独立的预写日志，不与可撤销的分类配置快照混合。</summary>
 public sealed class ArchiveService(string journalDirectory)
 {
     private readonly SemaphoreSlim gate = new(1, 1);
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
+    public IReadOnlyList<ArchiveWarning> Warnings { get; private set; } = [];
 
     public static bool IsInside(string path, string root) => Path.GetFullPath(path).StartsWith(
         Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
@@ -95,22 +98,49 @@ public sealed class ArchiveService(string journalDirectory)
 
     public IReadOnlyList<ArchiveBatch> History()
     {
-        if (!Directory.Exists(journalDirectory)) return [];
-        var records = new List<ArchiveBatch>();
-        foreach (var path in Directory.EnumerateFiles(journalDirectory, "*.json"))
+        var records = new List<ArchiveBatch>(); var warnings = new List<ArchiveWarning>();
+        if (!Directory.Exists(journalDirectory)) { Warnings = []; return []; }
+        try
         {
-            var batch = JsonSerializer.Deserialize<ArchiveBatch>(File.ReadAllText(path), Json) ?? throw new InvalidDataException($"归档日志损坏：{path}");
-            ValidateJournal(batch); records.Add(batch);
+            var paths = Directory.EnumerateFiles(journalDirectory, "*.json")
+                .Concat(Directory.EnumerateFiles(journalDirectory, "*.json.bak").Select(p => p[..^4])).Distinct(StringComparer.OrdinalIgnoreCase);
+            foreach (var path in paths)
+            {
+                var id = Path.GetFileNameWithoutExtension(path);
+                try { records.Add(ReadJournal(path, id)); }
+                catch (Exception ex) when (JournalError(ex))
+                {
+                    try
+                    {
+                        records.Add(ReadJournal(path + ".bak", id));
+                        warnings.Add(new(id, "backup", "归档记录已从有效备份读取；恢复时保留损坏原件。"));
+                    }
+                    catch (Exception backupError) when (JournalError(backupError))
+                    { warnings.Add(new(id, "unavailable", "归档记录与备份均不可读取，已保留原件并跳过；其他记录可继续使用。")); }
+                }
+            }
         }
+        catch (Exception ex) when (JournalError(ex)) { warnings.Add(new("", "unavailable", "归档日志目录不可读取；桌面虚拟整理仍可使用。")); }
+        Warnings = warnings;
         return records.OrderByDescending(b => b.CreatedUtc).ToList();
+    }
+    private static bool JournalError(Exception ex) => ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or ArgumentException or NullReferenceException;
+    private ArchiveBatch ReadJournal(string path, string expectedId)
+    {
+        var batch = JsonSerializer.Deserialize<ArchiveBatch>(File.ReadAllText(path), Json) ?? throw new InvalidDataException("归档日志为空。");
+        if (!string.Equals(batch.Id, expectedId, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("归档记录编号与文件名不一致。");
+        ValidateJournal(batch); return batch;
     }
     private void ValidateJournal(ArchiveBatch batch)
     {
         _ = JournalPath(batch);
-        if (!Path.IsPathFullyQualified(batch.DestinationRoot)) throw new InvalidDataException("归档目标不是绝对路径。");
+        if (!Path.IsPathFullyQualified(batch.DestinationRoot) || batch.Items == null) throw new InvalidDataException("归档目标或项目列表无效。");
         foreach (var item in batch.Items)
-            if (!Path.IsPathFullyQualified(item.Source) || !IsInside(item.Destination, batch.DestinationRoot)
-                || item.Source.Equals(item.Destination, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("归档记录路径无效。");
+            if (item == null || !Path.IsPathFullyQualified(item.Source) || !Path.IsPathFullyQualified(item.Destination) || !IsInside(item.Destination, batch.DestinationRoot)
+                || item.Source.Equals(item.Destination, StringComparison.OrdinalIgnoreCase) || item.Length < 0
+                || item.Status is not ("Planned" or "Skipped" or "Copying" or "DestinationReady" or "Archived" or "Review" or "Failed" or "Restoring" or "RestoreCopied" or "Restored" or "RestoreFailed")
+                || (item.Status != "Skipped" && (item.Sha256 == null || item.Sha256.Length != 64 || !item.Sha256.All(Uri.IsHexDigit))))
+                throw new InvalidDataException("归档记录路径、状态或校验值无效。");
     }
 
     public async Task ExecuteAsync(ArchiveBatch batch, CancellationToken cancellation = default)
@@ -183,7 +213,7 @@ public sealed class ArchiveService(string journalDirectory)
         await gate.WaitAsync(cancellation);
         try
         {
-            var batch = History().Single(b => b.Id == batchId);
+            var batch = History().SingleOrDefault(b => b.Id == batchId) ?? throw new IOException("归档记录不可读取，未操作文件。请先核查日志与备份。");
             foreach (var item in batch.Items.Where(i => i.Status is "Archived" or "RestoreFailed"))
             {
                 try
@@ -213,23 +243,37 @@ public sealed class ArchiveService(string journalDirectory)
         await gate.WaitAsync();
         try
         {
-            foreach (var batch in History())
+            var records = History(); var warnings = Warnings.ToList();
+            var recovered = warnings.Where(w => w.Kind == "backup").Select(w => w.JournalId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var batch in records)
             {
-                var changed = false;
-                foreach (var item in batch.Items.Where(i => i.Status is "Copying" or "DestinationReady" or "Restoring" or "RestoreCopied"))
+                try
                 {
-                    changed = true;
-                    try
+                    if (recovered.Contains(batch.Id))
                     {
-                        ValidatePhysicalPath(item.Source); ValidatePhysicalPath(item.Destination);
-                        if (!File.Exists(item.Source) && HasContent(item.Destination, item)) { item.Status = "Archived"; item.Message = "已从中断日志确认归档完成"; }
-                        else if (!File.Exists(item.Destination) && HasContent(item.Source, item)) { item.Status = item.Status is "Restoring" or "RestoreCopied" ? "Restored" : "Failed"; item.Message = "源位置文件完整"; }
-                        else { item.Status = "Review"; item.Message = "操作曾中断，文件均保留。请核对原位置和目标位置。"; }
+                        var path = JournalPath(batch);
+                        if (File.Exists(path)) File.Copy(path, path + ".corrupt-" + Guid.NewGuid().ToString("N"), false);
+                        Save(batch);
                     }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { item.Status = "Review"; item.Message = ex.Message; }
+                    var changed = false;
+                    foreach (var item in batch.Items.Where(i => i.Status is "Copying" or "DestinationReady" or "Restoring" or "RestoreCopied"))
+                    {
+                        changed = true;
+                        try
+                        {
+                            ValidatePhysicalPath(item.Source); ValidatePhysicalPath(item.Destination);
+                            if (!File.Exists(item.Source) && HasContent(item.Destination, item)) { item.Status = "Archived"; item.Message = "已从中断日志确认归档完成"; }
+                            else if (!File.Exists(item.Destination) && HasContent(item.Source, item)) { item.Status = item.Status is "Restoring" or "RestoreCopied" ? "Restored" : "Failed"; item.Message = "源位置文件完整"; }
+                            else { item.Status = "Review"; item.Message = "操作曾中断，文件均保留。请核对原位置和目标位置。"; }
+                        }
+                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { item.Status = "Review"; item.Message = ex.Message; }
+                    }
+                    if (changed) Save(batch);
                 }
-                if (changed) Save(batch);
+                catch (Exception ex) when (JournalError(ex))
+                { warnings.Add(new(batch.Id, "write-failed", "归档恢复记录无法保存，文件保持原状；桌面虚拟整理仍可使用。")); }
             }
+            Warnings = warnings;
         }
         finally { gate.Release(); }
     }

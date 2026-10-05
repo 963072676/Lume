@@ -13,7 +13,7 @@ public sealed partial class MainWindow
         settingsBody = new();
         var layout = new DockPanel(); var tabs = new StackPanel { Orientation = Orientation.Horizontal, Margin = new(0, 0, 0, 16) };
         settingsTabs.Clear();
-        foreach (var name in new[] { "常规", "外观", "分区", "目录", "AI 与数据" })
+        foreach (var name in new[] { "常规", "外观", "分区", "目录", "AI 与数据", "关于" })
         {
             var tab = Ui.Button(name, () => { settingsSection = name; RenderSettingsSection(); });
             settingsTabs[name] = tab; tabs.Children.Add(tab);
@@ -36,6 +36,7 @@ public sealed partial class MainWindow
             case "分区": AddCollectionsSettings(panel); AddGlassSettings(panel); break;
             case "目录": AddRootsSettings(panel); break;
             case "AI 与数据": AddAiSettings(panel); AddDataSettings(panel); break;
+            case "关于": AddAboutSettings(panel); break;
             default: AddGeneralSettings(panel); AddIntegrationSettings(panel); break;
         }
         settingsBody.Content = panel;
@@ -119,7 +120,17 @@ public sealed partial class MainWindow
         var startup = new CheckBox { Content = Ui.Text("登录 Windows 后自动显示", Tokens.Secondary), IsChecked = !demo && StartupRegistration.Enabled, IsEnabled = !demo };
         startup.ToolTip = demo ? "演示模式不修改开机启动" : "登录当前 Windows 用户后显示桌面分区";
         startup.Click += (_, _) => { try { StartupRegistration.Set(startup.IsChecked == true); } catch (Exception ex) { startup.IsChecked = StartupRegistration.Enabled; ShowError(ex); } }; Ui.AddFormRow(dailyGrid, "开机启动", demo ? "隔离演示中不可用。" : "登录后自动整理桌面。", startup, 1);
-        daily.Children.Add(dailyGrid); panel.Children.Add(Ui.Card(daily));
+        daily.Children.Add(dailyGrid);
+        if (!demo && StartupRegistration.RegisteredCommand != null && !StartupRegistration.Enabled)
+        {
+            daily.Children.Add(Ui.Text("已有启动项指向其他位置，可备份后迁移到当前版本。", Tokens.Secondary, Ui.Muted));
+            daily.Children.Add(Ui.Button("迁移开机启动到当前版本", () =>
+            {
+                try { StartupRegistration.MigrateOwned(RuntimeIdentity.BackupDirectory(Path.GetDirectoryName(store.Path)!)); startup.IsChecked = StartupRegistration.Enabled; status.Text = "原启动项已备份并迁移"; }
+                catch (Exception ex) { ShowError(ex); }
+            }));
+        }
+        panel.Children.Add(Ui.Card(daily));
 
     }
     private void AddIntegrationSettings(StackPanel panel)
@@ -266,6 +277,62 @@ public sealed partial class MainWindow
             catch (Exception ex) { ShowError(ex); }
         }), 3);
         data.Children.Add(dataGrid);
+        var transfers = Ui.Row(Ui.Button("导出完整数据备份…", ExportDataBackup), Ui.Button("恢复完整数据备份…", RestoreDataBackup));
+        transfers.Margin = new(0, 12, 0, 0); data.Children.Add(transfers);
+        data.Children.Add(Ui.Text("完整备份包含规则、分区、布局、历史、归档记录和账户加密的 AI 设置，含真实文件名与路径，请妥善保管。恢复会退出重启并保留当前整份数据；不会撤销真实文件移动。", Tokens.Label, Ui.Muted));
         panel.Children.Add(Ui.Card(data));
+    }
+
+    internal string GuardDescription { get; set; } = "尚未启动";
+    internal Func<string>? ReadGuardDescription { get; set; }
+    internal Action<string>? RestoreDataRequested { get; set; }
+    private bool dataTransferBusy;
+    private void AddAboutSettings(StackPanel panel)
+    {
+        var body = new StackPanel(); body.Children.Add(Ui.Text("Lume · 版本与运行环境", Tokens.SectionTitle, bold: true));
+        var rows = Ui.FormGrid();
+        Ui.AddFormRow(rows, "当前版本", RuntimeIdentity.Version, Ui.Text("便携版", Tokens.Secondary, Ui.Muted), 0);
+        Ui.AddFormRow(rows, "构建提交", RuntimeIdentity.Commit, Ui.Text("", Tokens.Secondary), 1);
+        Ui.AddFormRow(rows, "程序目录", AppContext.BaseDirectory, Ui.Button("打开", () => ShellOpen(AppContext.BaseDirectory)), 2);
+        Ui.AddFormRow(rows, "数据目录", Path.GetDirectoryName(store.Path)!, Ui.Button("打开", () => ShellOpen(Path.GetDirectoryName(store.Path)!)), 3);
+        Ui.AddFormRow(rows, "恢复保护", ReadGuardDescription?.Invoke() ?? GuardDescription, Ui.Text("", Tokens.Secondary), 4);
+        Ui.AddFormRow(rows, "开机启动", demo ? "隔离演示未注册" : StartupRegistration.RegisteredCommand ?? "未启用", Ui.Text("", Tokens.Secondary), 5);
+        body.Children.Add(rows);
+        body.Children.Add(Ui.Text("升级时先退出旧版本。旧格式首次迁移前自动创建完整备份；已有 Lume 开机启动项会备份并迁移，关闭的启动项不会自动启用。", Tokens.Label, Ui.Muted));
+        body.Children.Add(Ui.Button("查看 GitHub 发布", () => ShellOpen("https://github.com/963072676/Lume/releases")));
+        panel.Children.Add(Ui.Card(body));
+    }
+    private async void ExportDataBackup()
+    {
+        if (dataTransferBusy) { status.Text = "数据备份或恢复校验正在进行，请稍候。"; return; }
+        var dialog = new SaveFileDialog { Filter = "Lume 完整数据备份|*.lume-backup.zip", FileName = "Lume-数据-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".lume-backup.zip" };
+        if (dialog.ShowDialog(this) != true) return;
+        dataTransferBusy = true;
+        try
+        {
+            store.Save(organizer.State);
+            status.Text = "正在备份全部本地数据…";
+            var result = await Task.Run(() => DataBackup.Export(Path.GetDirectoryName(store.Path)!, dialog.FileName, RuntimeIdentity.Version));
+            if (!closed) status.Text = $"已备份 {result.Collections} 个分区、{result.HistoryEntries} 条历史";
+        }
+        catch (Exception ex) { if (!closed) ShowError(ex); }
+        finally { dataTransferBusy = false; }
+    }
+    private async void RestoreDataBackup()
+    {
+        if (dataTransferBusy) { status.Text = "数据备份或恢复校验正在进行，请稍候。"; return; }
+        var dialog = new OpenFileDialog { Filter = "Lume 完整数据备份|*.lume-backup.zip;*.zip" };
+        if (dialog.ShowDialog(this) != true) return;
+        dataTransferBusy = true;
+        try
+        {
+            status.Text = "正在校验备份完整性…";
+            var info = await Task.Run(() => DataBackup.Inspect(dialog.FileName)); if (closed) return;
+            if (MessageBox.Show(this, $"恢复 {info.CreatedUtc.ToLocalTime():yyyy-MM-dd HH:mm} 的完整备份？\n{info.Collections} 个分区、{info.HistoryEntries} 条历史。\n\nLume 将退出并重启，当前整份数据另行保留。恢复配置不会撤销真实文件移动；跨账户的 AI 密钥可能需重新填写。", "恢复完整数据", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+            if (RestoreDataRequested == null) throw new InvalidOperationException("当前验证模式不执行数据恢复，请在便携版中使用。");
+            RestoreDataRequested(dialog.FileName);
+        }
+        catch (Exception ex) { if (!closed) ShowError(ex); }
+        finally { dataTransferBusy = false; }
     }
 }

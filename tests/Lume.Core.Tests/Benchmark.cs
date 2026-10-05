@@ -43,9 +43,29 @@ internal static class Benchmark
                 passed &= ok;
                 rows.Add(new { scenario = "settings-save", historyCount = count, medianMs = measurement.Milliseconds, allocatedBytes = measurement.Bytes, maxMs = 1000, maxAllocatedBytes = 1024 * 1024, passed = ok });
             }
+            {
+                var now = DateTime.UtcNow; var config = AppState.Create([]).Configuration;
+                config.Rules = Enumerable.Range(0, 30).Select(i => new Rule("bench-" + i, "synthetic", "work", [new("extension", "in", $"fake{i},never{i}")])).ToList();
+                var files = Enumerable.Range(0, 5000).Select(i => new DesktopFile(Path.Combine(root, $"file-{i}.data"), $"file-{i}.data", ".data", 1, now, now, false, "unknown")).ToList();
+                foreach (var batch in new[] { false, true })
+                {
+                    var measurement = Measure(() =>
+                    {
+                        if (batch) { if (RuleEngine.ClassifyFiles(files, config, now).Any(r => r != "inbox")) throw new InvalidOperationException("批量归类结果不正确"); }
+                        else foreach (var file in files) if (RuleEngine.Classify(file, config, now) != "inbox") throw new InvalidOperationException("预处理归类结果不正确");
+                    });
+                    var ok = measurement.Milliseconds < 1000 && measurement.Bytes < 4 * 1024 * 1024; passed &= ok;
+                    rows.Add(new { scenario = batch ? "batch-rules" : "cached-rules", count = files.Count, rules = 30, medianMs = measurement.Milliseconds, allocatedBytes = measurement.Bytes, maxMs = 1000, maxAllocatedBytes = 4 * 1024 * 1024, passed = ok });
+                }
+                config.Rules = [new("regex", "synthetic", "work", [new("name", "regex", "^(a+)+$")])];
+                files = files.Take(100).Select(f => f with { Name = new string('a', 120) + "!" }).ToList();
+                var regex = Measure(() => { foreach (var file in files) if (RuleEngine.Classify(file, config, now) != "inbox") throw new InvalidOperationException("正则结果不正确"); });
+                var regexOk = regex.Milliseconds < 1000 && regex.Bytes < 4 * 1024 * 1024; passed &= regexOk;
+                rows.Add(new { scenario = "nonbacktracking-regex", count = files.Count, medianMs = regex.Milliseconds, allocatedBytes = regex.Bytes, maxMs = 1000, maxAllocatedBytes = 4 * 1024 * 1024, passed = regexOk });
+            }
             var result = new { passed, framework = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription, os = Environment.OSVersion.Version.ToString(), processors = Environment.ProcessorCount, samples = 7, rows };
             File.WriteAllText(output, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
-            Console.WriteLine(passed ? "PASS 性能回归（4 场景，7 次采样）" : "FAIL 性能回归，见结果文件");
+            Console.WriteLine(passed ? "PASS 性能回归（7 场景，7 次采样）" : "FAIL 性能回归，见结果文件");
             return passed ? 0 : 1;
         }
         finally

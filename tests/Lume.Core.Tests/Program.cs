@@ -67,6 +67,7 @@ Test("收件箱不可删除且分区可重命名", () => { var o = Create("renam
 ArchiveTests.Register(Test, root);
 PerformanceTests.Register(Test, root);
 StorageTests.Register(Test, root);
+ReliabilityTests.Register(Test, root);
 DiagnosticsTests.Register(Test, root);
 RuleMatchingTests.Register(Test, root);
 AiAnalysisTests.Register(Test, root);

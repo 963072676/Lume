@@ -33,6 +33,7 @@ internal sealed class DesktopCardWindow : Window
     private readonly Action finishAdjustment;
     private bool adjusting;
     private bool searchOpen;
+    private readonly System.Windows.Threading.DispatcherTimer searchDelay = new() { Interval = TimeSpan.FromMilliseconds(140) };
     private readonly List<UIElement> collapsible = [];
     private readonly Button collapseButton;
     private readonly Button lockButton;
@@ -124,7 +125,9 @@ internal sealed class DesktopCardWindow : Window
             else if (e.Key == Key.Escape && header.IsMouseCaptured) { header.ReleaseMouseCapture(); e.Handled = true; }
         };
         Grid.SetRow(searchHost, 1); searchHost.Margin = new Thickness(0, 0, 0, 8); searchHost.Children.Add(search); body.Children.Add(searchHost);
-        search.TextChanged += (_, _) => { filePage = 0; UpdateFiles(true); };
+        search.TextChanged += (_, _) => { filePage = 0; searchDelay.Stop(); searchDelay.Start(); };
+        searchDelay.Tick += (_, _) => { searchDelay.Stop(); UpdateFiles(true); };
+        Closed += (_, _) => searchDelay.Stop();
         var scroll = new ScrollViewer { Content = files, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }; Grid.SetRow(scroll, 2); body.Children.Add(scroll);
         collapsible.Add(searchHost); collapsible.Add(scroll);
         Grid.SetRow(pager, 3); body.Children.Add(pager); collapsible.Add(pager);
@@ -211,9 +214,13 @@ internal sealed class DesktopCardWindow : Window
         Position();
         title.Text = collection.Name; title.TextWrapping = TextWrapping.NoWrap; title.TextTrimming = TextTrimming.CharacterEllipsis; title.ToolTip = collection.MappedPath ?? collection.Name;
         var all = organizer.CollectionFiles(CollectionId, search.Text);
+        if (countBadge.Child is TextBlock count) count.Text = all.Count.ToString();
+        if (options.Collapsed)
+        {
+            files.Children.Clear(); pager.Children.Clear(); Selection.SetFiles([]); signature = ""; return;
+        }
         var pages = Math.Max(1, (all.Count + PageSize - 1) / PageSize); filePage = Math.Clamp(filePage, 0, pages - 1);
         var selected = all.Skip(filePage * PageSize).Take(PageSize).ToList();
-        if (countBadge.Child is TextBlock count) count.Text = all.Count.ToString();
         var current = string.Join("|", selected.Select(f => f.Path + f.ModifiedUtc.Ticks + f.Size)) + collection.Name + options + filePage + all.Count;
         if (!force && current == signature) return; signature = current;
         pager.Children.Clear();
@@ -224,7 +231,6 @@ internal sealed class DesktopCardWindow : Window
             pager.Children.Add(previous); pager.Children.Add(Ui.Text($"{filePage + 1} / {pages}  ", Tokens.Label, Brushes.White)); pager.Children.Add(next);
         }
         files.Children.Clear();
-        if (options.Collapsed) { Selection.SetFiles([]); return; }
         Selection.SetFiles(selected);
         var tileOwners = new Dictionary<Button, DesktopFile>();
         // 拖放提示结束后必须恢复由 UpdateTile 算出的边框与选中态，不能简单置 0。
