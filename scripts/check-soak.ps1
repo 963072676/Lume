@@ -17,9 +17,17 @@ $progress = Read-Report $progressFile
 if ($progress -and ($progress.pid -ne $run.pid -or ([DateTime]$progress.utc).ToUniversalTime() -lt $startedUtc)) { $progress = $null }
 $heartbeatAge = if ($progress) { ([DateTime]::UtcNow - ([DateTime]$progress.utc).ToUniversalTime()).TotalSeconds } else { $null }
 $progressFresh = $null -ne $heartbeatAge -and $heartbeatAge -ge -5 -and $heartbeatAge -le 90
-$hashMatches = (Get-FileHash -LiteralPath $run.executable -Algorithm SHA256).Hash -eq $run.sha256
-$resultMatches = $result -and $result.minutes -eq $run.minutes -and (!$result.PSObject.Properties['pid'] -or $result.pid -eq $run.pid)
-if ($resultMatches -and $result.PSObject.Properties['commit']) { $resultMatches = $result.commit -eq $run.commit -and $result.version -eq $run.version }
+$hashMatches = $false
+try { $hashMatches = (Get-FileHash -LiteralPath $run.executable -Algorithm SHA256).Hash -eq $run.sha256 } catch { }
+$requiredResultFields = @('passed', 'pid', 'minutes', 'activeSeconds', 'version', 'commit')
+$resultHasIdentity = $result -and @($requiredResultFields | Where-Object { !$result.PSObject.Properties[$_] }).Count -eq 0
+$resultMatches = $resultHasIdentity -and $result.passed -is [bool] -and $result.minutes -eq $run.minutes -and $result.pid -eq $run.pid `
+    -and $result.commit -ceq $run.commit -and $result.version -ceq $run.version
+if ($resultMatches) {
+    $resultMatches = $result.activeSeconds -is [ValueType] -and $result.activeSeconds -isnot [bool] `
+        -and [double]::IsFinite([double]$result.activeSeconds) -and [double]$result.activeSeconds -ge 0 `
+        -and [double]$result.activeSeconds -le ([DateTime]::UtcNow - $startedUtc).TotalSeconds + 5
+}
 $status = if (!$hashMatches) { 'invalid' } elseif ($resultMatches -and !$result.passed) { 'failed' } elseif ($sameProcess) {
     if ($progressFresh) { 'running' } elseif (([DateTime]::UtcNow - $startedUtc).TotalSeconds -le 90) { 'starting' } else { 'stalled' }
 } elseif ($resultMatches -and $result.passed -and $result.activeSeconds -ge $run.minutes*60) { 'passed' } else { 'incomplete' }
@@ -48,4 +56,4 @@ $trend = if ($steady.Count -ge 31 -and ([double]$steady[-1].activeSeconds - [dou
         cpuCorePercent=$(if($duration -gt 0) { [Math]::Round(([double]$last.cpuMs - [double]$first.cpuMs)/($duration*1000)*100, 3) } else { $null }) }
 } else { $null }
 [ordered]@{status=$status;pid=$run.pid;sameProcess=[bool]$sameProcess;hashMatches=$hashMatches;requestedMinutes=$run.minutes;version=$run.version;commit=$run.commit;
-    progressFresh=[bool]$progressFresh;lastHeartbeatAgeSeconds=$heartbeatAge;sampleCount=$samples.Count;resourceTrend=$trend;progress=$progress;result=$result} | ConvertTo-Json -Depth 6
+    resultMatches=[bool]$resultMatches;progressFresh=[bool]$progressFresh;lastHeartbeatAgeSeconds=$heartbeatAge;sampleCount=$samples.Count;resourceTrend=$trend;progress=$progress;result=$result} | ConvertTo-Json -Depth 6

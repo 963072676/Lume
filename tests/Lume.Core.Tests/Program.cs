@@ -142,6 +142,7 @@ SelectionTests.Register(Test);
 ShellScanTests.Register(Test, root);
 ReferenceRetentionTests.Register(Test, root);
 CollectionQueryTests.Register(Test, root);
+FileSearchTests.Register(Test);
 var failed = 0;
 try
 {

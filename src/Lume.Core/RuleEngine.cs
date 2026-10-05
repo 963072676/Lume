@@ -228,7 +228,7 @@ public static class RuleEngine
         check(); return results;
     }
 
-    public static string[] SearchTerms(string query) => query.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+    public static string[] SearchTerms(string query) => query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
     public static bool Search(DesktopFile file, string query) => query.Length == 0 || Search(file, SearchTerms(query));
     public static bool Search(DesktopFile file, IReadOnlyList<string> terms)
     {

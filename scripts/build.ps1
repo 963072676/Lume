@@ -32,6 +32,7 @@ Copy-Item -LiteralPath (Join-Path $projectRoot 'docs/支持与已知问题.md') 
 Copy-Item -LiteralPath (Join-Path $projectRoot 'docs/Shell请求隔离.md') -Destination $staging
 Copy-Item -LiteralPath (Join-Path $projectRoot 'docs/过期引用清理.md') -Destination $staging
 Copy-Item -LiteralPath (Join-Path $projectRoot 'docs/验证下载.md') -Destination $staging
+Copy-Item -LiteralPath (Join-Path $projectRoot 'docs/快速操作与搜索.md') -Destination $staging
 if (!$FrameworkDependent) {
     # Copy notices from the exact runtime packages selected by this restore.
     $assets = Get-Content (Join-Path $projectRoot 'src/Lume.Desktop/obj/project.assets.json') -Raw | ConvertFrom-Json

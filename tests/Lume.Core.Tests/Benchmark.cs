@@ -87,6 +87,27 @@ internal static class Benchmark
                 var regexOk = regex.Milliseconds < 1000 && regex.Bytes < 4 * 1024 * 1024; passed &= regexOk;
                 rows.Add(new { scenario = "nonbacktracking-regex", count = files.Count, medianMs = regex.Milliseconds, allocatedBytes = regex.Bytes, maxMs = 1000, maxAllocatedBytes = 4 * 1024 * 1024, passed = regexOk });
             }
+            foreach (var count in new[] { 10000, 100000 })
+            {
+                var now = DateTime.UtcNow;
+                var files = Enumerable.Range(0, count).Select(i => new DesktopFile(Path.Combine(root, $"search-{i:D6}.txt"), $"search-{i:D6}.txt", ".txt", 1, now, now, false, "unknown")).ToArray();
+                foreach (var query in new[] { "search txt", "missing txt" })
+                {
+                    var expected = query.StartsWith("missing") ? 0 : 40;
+                    var baseline = Measure(() =>
+                    {
+                        if (files.Where(f => RuleEngine.Search(f, query)).Take(40).Count() != expected) throw new InvalidOperationException("查询基线结果不正确");
+                    });
+                    var measurement = Measure(() =>
+                    {
+                        var found = FileSearch.Find(files, query);
+                        if (found.Files.Count != expected || found.HasMore != (expected == 40)) throw new InvalidOperationException("有界文件搜索结果不正确");
+                    });
+                    var ok = measurement.Milliseconds < 250 && measurement.Bytes < 16 * 1024; passed &= ok;
+                    rows.Add(new { scenario = "file-search", count, matching = expected > 0, medianMs = measurement.Milliseconds, allocatedBytes = measurement.Bytes,
+                        baselineMs = baseline.Milliseconds, baselineAllocatedBytes = baseline.Bytes, maxMs = 250, maxAllocatedBytes = 16 * 1024, passed = ok });
+                }
+            }
             var result = new { passed, framework = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription, os = Environment.OSVersion.Version.ToString(), processors = Environment.ProcessorCount, samples = 7, rows };
             File.WriteAllText(output, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
             Console.WriteLine(passed ? $"PASS 性能回归（{rows.Count} 场景，7 次采样）" : "FAIL 性能回归，见结果文件");

@@ -20,6 +20,13 @@ $result.pid = 0; Check-Status 'incomplete' 'Unrelated process result is rejected
 $result.minutes = 2; Check-Status 'incomplete' 'Different duration result is rejected'; $result.minutes = 1
 $result.activeSeconds = 59; Check-Status 'incomplete' 'Insufficient active duration is rejected'; $result.activeSeconds = 60
 $result.commit = 'different'; Check-Status 'incomplete' 'Different binary commit is rejected'; $result.commit = 'fixture'
+$result.version = 'different'; Check-Status 'incomplete' 'Different binary version is rejected'; $result.version = 'fixture'
+foreach ($field in @('pid', 'version', 'commit')) {
+    $saved = $result[$field]; $result.Remove($field); Check-Status 'incomplete' ('Missing result ' + $field + ' is rejected'); $result[$field] = $saved
+}
+$result.passed = 'false'; Check-Status 'incomplete' 'String success marker is rejected'; $result.passed = $true
+$result.activeSeconds = '60'; Check-Status 'incomplete' 'String active duration is rejected'; $result.activeSeconds = 60
+$run.minutes = 480; $result.minutes = 480; $result.activeSeconds = 28800; Check-Status 'incomplete' 'Active duration exceeding elapsed time is rejected'; $run.minutes = 1; $result.minutes = 1; $result.activeSeconds = 60
 $run.sha256 = 'different'; Check-Status 'invalid' 'Changed binary hash invalidates acceptance'; $run.sha256 = (Get-FileHash -LiteralPath $exe).Hash
 $result.passed = $false; Check-Status 'failed' 'Matching failure is reported'; $result.passed = $true
 $run | ConvertTo-Json | Set-Content -LiteralPath $runPath

@@ -31,6 +31,7 @@ public static class Program
         if (args.Contains("--reliability-self-test")) return ReliabilityVerification.Run();
         if (args.Contains("--shell-worker-self-test")) return ShellWorkerVerification.Run();
         if (args.Contains("--retention-self-test")) return ReferenceRetentionVerification.Run();
+        if (args.Contains("--palette-self-test")) return CommandPalette.RunVerification();
         if (args.Contains("--menu-self-test")) return DesktopMenuVerification.Run();
         if (args.Contains("--icons-self-test")) return IconVerification.Run();
         if (args.Contains("--features-self-test")) return FeatureVerification.Run(!args.Contains("--no-input"));
