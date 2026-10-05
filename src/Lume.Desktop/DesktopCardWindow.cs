@@ -48,6 +48,8 @@ internal sealed class DesktopCardWindow : Window
         Func<string, CardPlacement, string, CardPlacement>? adjust = null, Action? finishAdjustment = null)
     {
         this.organizer = organizer; this.tileFactory = tileFactory; this.refresh = refresh; this.placement = placement; this.desktop = desktop; CollectionId = collection.Id;
+        System.Windows.Automation.AutomationProperties.SetName(search, "搜索此分区的文件");
+        System.Windows.Automation.AutomationProperties.SetAcceleratorKey(search, "Ctrl+F");
         this.adjust = adjust ?? ((_, p, _) => p); this.finishAdjustment = finishAdjustment ?? (() => { });
         Style = (Style)Application.Current.FindResource(typeof(Window));
         Title = "Lume.Desktop." + collection.Id; WindowStyle = WindowStyle.None; ResizeMode = ResizeMode.NoResize;

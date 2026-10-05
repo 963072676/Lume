@@ -154,7 +154,7 @@ internal sealed class SystemDesktopWindow : Window
             var context = new ContextMenu(); var open = new MenuItem { Header = "打开" }; open.Click += (_, _) => Open(entry); context.Items.Add(open); button.ContextMenu = context;
             button.ContextMenuOpening += (_, e) =>
             {
-                DesktopNative.GetCursorPos(out var pt);
+                var pt = Ui.ContextMenuPoint(button, e.CursorLeft == -1 && e.CursorTop == -1);
                 if (ShellContextMenu.Show(handle, new[] { "::{" + entry.Id + "}" }, pt))
                     e.Handled = true;
             };

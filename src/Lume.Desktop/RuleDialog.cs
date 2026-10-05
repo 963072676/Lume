@@ -51,8 +51,9 @@ internal sealed class RuleDialog : Window
         editor = body;
         body.Children.Add(Ui.Text("让文件自己找到位置", Tokens.DialogTitle, bold: true));
         var subtitle = Ui.Text("全部条件满足时归入目标分区。列表靠上的规则先匹配。", Tokens.Secondary, Ui.Muted); subtitle.Margin = new(0, 8, 0, 20); body.Children.Add(subtitle);
-        body.Children.Add(Ui.Text("规则名称")); name.Text = rule?.Name ?? ""; name.Margin = new(0, 6, 0, 18); body.Children.Add(name);
-        body.Children.Add(Ui.Text("AI 生成条件（描述用途，可留空使用规则名称）", 12));
+        var nameLabel = Ui.Text("规则名称"); body.Children.Add(nameLabel); Ui.LabelInput(name, nameLabel);
+        name.Text = rule?.Name ?? ""; name.Margin = new(0, 6, 0, 18); body.Children.Add(name);
+        var promptLabel = Ui.Text("AI 生成条件（描述用途，可留空使用规则名称）", 12); body.Children.Add(promptLabel); Ui.LabelInput(aiPrompt, promptLabel);
         aiPrompt.Margin = new(0, 6, 0, 8); body.Children.Add(aiPrompt);
         body.Children.Add(Ui.Row(Ui.Button("AI 分析并填入条件", () => _ = GenerateAsync(), true),
             Ui.Button("填入常见多媒体后缀", () => ReplaceConditions([new("extension", "in", "mp3,wav,flac,aac,m4a,ogg,opus,wma,aiff,ape,mp4,mkv,avi,mov,wmv,webm,flv,m4v,mpeg,mpg,ts,m2ts,3gp")]))));
@@ -60,7 +61,7 @@ internal sealed class RuleDialog : Window
         body.Children.Add(Ui.Text("当文件满足以下所有条件", 14, bold: true));
         rows.Margin = new(0, 12, 0, 12); body.Children.Add(rows);
         body.Children.Add(Ui.Button("＋ 添加条件", () => { if (conditions.Count < 12) AddCondition(new("name", "contains", "")); }));
-        var destination = Ui.Row(Ui.Text("那么，放入分区  "));
+        var targetLabel = Ui.Text("那么，放入分区  "); Ui.LabelInput(target, targetLabel); var destination = Ui.Row(targetLabel);
         target.ItemsSource = organizer.State.Configuration.Collections.Where(c => c.MappedPath == null && !c.Recent).ToList(); target.DisplayMemberPath = "Name"; target.SelectedValuePath = "Id";
         target.SelectedValue = rule?.CollectionId ?? "work"; target.Width = 210; destination.Children.Add(target); destination.Margin = new(0, 24, 0, 6); body.Children.Add(destination);
         enabled.IsChecked = rule?.Enabled ?? true; body.Children.Add(enabled);
@@ -105,8 +106,13 @@ internal sealed class RuleDialog : Window
         var choices = new ComboBox { Width = 270, SelectedValuePath = "Id" };
         var valueHost = new ContentControl { Width = 270, Margin = new(0, 0, 8, 0), Content = value };
         var row = Ui.Row(field, op, valueHost); row.Margin = new(0, 0, 0, 10);
+        System.Windows.Automation.AutomationProperties.SetName(field, "条件字段");
         void SetOperators()
         {
+            var label = (field.SelectedItem as FieldOption)?.Label ?? "条件";
+            System.Windows.Automation.AutomationProperties.SetName(op, label + "匹配方式");
+            System.Windows.Automation.AutomationProperties.SetName(value, label + "条件值");
+            System.Windows.Automation.AutomationProperties.SetName(choices, label + "条件值");
             op.ItemsSource = (field.SelectedValue as string) switch
             {
                 "extension" or "targetExtension" => new FieldOption[] { new("in", "是其中之一") },

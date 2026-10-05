@@ -195,6 +195,7 @@ public sealed partial class MainWindow : Window
         DockPanel.SetDock(viewSwitcher, Dock.Right); toolbar.Children.Add(viewSwitcher);
         searchTools.Children.Clear();
         System.Windows.Automation.AutomationProperties.SetName(search, "搜索当前视图文件");
+        System.Windows.Automation.AutomationProperties.SetAcceleratorKey(search, "Ctrl+F");
         var caption = Ui.Text("搜索  ", Tokens.Secondary, Ui.Muted); searchTools.Children.Add(caption);
         searchTools.Children.Add(search);
         var refresh = Ui.Button("刷新", () => _ = RefreshAsync()); refresh.Height = 34; refresh.MinHeight = 34; refresh.Padding = new Thickness(12, 6, 12, 6); searchTools.Children.Add(refresh);

@@ -55,6 +55,7 @@ internal sealed class AiAnalysisDialog : Window
         {
             var row = form.RowDefinitions.Count; form.RowDefinitions.Add(new RowDefinition { MinHeight = 48 });
             var title = Ui.Text(label, Tokens.Secondary, Ui.SecondaryInk, true); title.VerticalAlignment = VerticalAlignment.Top; title.Margin = new Thickness(0, 8, 16, 0); Grid.SetRow(title, row); Grid.SetColumn(title, 0); form.Children.Add(title);
+            Ui.LabelInput(input, title);
             if (input is FrameworkElement element) element.Margin = new Thickness(0, 4, 0, 4); Grid.SetRow(input, row); Grid.SetColumn(input, 1); form.Children.Add(input);
         }
         Field("服务地址", baseUrl);

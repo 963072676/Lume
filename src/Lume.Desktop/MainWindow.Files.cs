@@ -148,9 +148,10 @@ public sealed partial class MainWindow
         panel.Children.Add(ShellIcons.CreateImage(file));
         var displayName = FilePresentation.DisplayName(file);
         var name = Ui.Text(displayName, Tokens.Label); name.TextAlignment = TextAlignment.Center; name.TextTrimming = TextTrimming.CharacterEllipsis; name.MaxHeight = 34; panel.Children.Add(name);
-        var button = new Button { Content = panel, Width = 88, Height = 88, Padding = new(6), Margin = new(0, 0, 6, 8), Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, BorderThickness = new(1), ToolTip = $"{displayName}\n{file.Path}\n{file.Source}\n双击打开；拖动或右键可归类" };
+        var button = new FileTileButton(() => OpenFile(file)) { Content = panel, Width = 88, Height = 88, Padding = new(6), Margin = new(0, 0, 6, 8), Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, BorderThickness = new(1), ToolTip = $"{displayName}\n{file.Path}\n{file.Source}\n双击打开；拖动或右键可归类" };
         Ui.UseStyle(button, "FileTileButton"); scope.Add(file, button);
         System.Windows.Automation.AutomationProperties.SetName(button, $"文件 {displayName}");
+        System.Windows.Automation.AutomationProperties.SetHelpText(button, file.Path);
         button.MouseDoubleClick += (_, _) => OpenFile(file);
         Point start = default; var dragging = false; var preserveSelection = false;
         button.PreviewMouseLeftButtonDown += (_, e) =>
@@ -177,7 +178,7 @@ public sealed partial class MainWindow
         {
             if (!scope.Model.Selected.Contains(file.Path)) scope.Model.Select(file.Path);
             scope.Refresh();
-            DesktopNative.GetCursorPos(out var pt);
+            var pt = Ui.ContextMenuPoint(button, e.CursorLeft == -1 && e.CursorTop == -1);
             var window = Window.GetWindow(button);
             var hwnd = window != null ? new WindowInteropHelper(window).Handle : IntPtr.Zero;
             var paths = scope.Model.PathsFor(file.Path);

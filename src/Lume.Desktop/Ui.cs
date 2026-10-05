@@ -1,5 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Automation;
+using System.Windows.Data;
 using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Shapes;
@@ -88,6 +90,7 @@ public static class Ui
     public static void UpdateTile(Button button, bool selected)
     {
         SetSelected(button, selected);
+        AutomationProperties.SetItemStatus(button, selected ? "已选中" : "未选中");
         var dark = IsDarkTile(button);
         if (dark)
         {
@@ -130,10 +133,36 @@ public static class Ui
     {
         while (grid.RowDefinitions.Count <= row) grid.RowDefinitions.Add(new RowDefinition { MinHeight = 58 });
         var text = new StackPanel { Margin = new(0, 8, 20, 8), VerticalAlignment = VerticalAlignment.Center };
-        text.Children.Add(Text(label, Tokens.Body, SecondaryInk));
+        var caption = Text(label, Tokens.Body, SecondaryInk); text.Children.Add(caption);
+        LabelInput(control, caption, description);
         if (!string.IsNullOrEmpty(description)) { var detail = Text(description, Tokens.Label, Muted); detail.Margin = new(0, 3, 0, 0); text.Children.Add(detail); }
         Grid.SetRow(text, row); grid.Children.Add(text);
         Grid.SetRow(control, row); Grid.SetColumn(control, 1); if (control is FrameworkElement element) element.VerticalAlignment = VerticalAlignment.Center; grid.Children.Add(control);
+    }
+    public static void LabelInput(UIElement input, TextBlock label, string? description = null)
+    {
+        if (input is TextBox or PasswordBox or ComboBox or Slider)
+        {
+            if (AutomationProperties.GetLabeledBy(input) == null) AutomationProperties.SetLabeledBy(input, label);
+            if (AutomationProperties.GetLabeledBy(input) is TextBlock caption
+                && DependencyPropertyHelper.GetValueSource(input, AutomationProperties.NameProperty).BaseValueSource == BaseValueSource.Default)
+                BindingOperations.SetBinding(input, AutomationProperties.NameProperty, new Binding(nameof(TextBlock.Text)) { Source = caption });
+            if (!string.IsNullOrWhiteSpace(description) && string.IsNullOrEmpty(AutomationProperties.GetHelpText(input))
+                && (input as FrameworkElement)?.ToolTip == null) AutomationProperties.SetHelpText(input, description);
+        }
+        else if (input is Panel panel) foreach (UIElement child in panel.Children) LabelInput(child, label, description);
+        else if (input is Decorator { Child: { } decorated }) LabelInput(decorated, label, description);
+        else if (input is ContentControl content && content is not System.Windows.Controls.Primitives.ButtonBase && content.Content is UIElement nested)
+            LabelInput(nested, label, description);
+    }
+    internal static DesktopNative.Point ContextMenuPoint(FrameworkElement target, bool keyboard)
+    {
+        if (keyboard)
+        {
+            var point = target.PointToScreen(new Point(target.ActualWidth / 2, target.ActualHeight / 2));
+            return new DesktopNative.Point { X = (int)Math.Round(point.X), Y = (int)Math.Round(point.Y) };
+        }
+        DesktopNative.GetCursorPos(out var cursor); return cursor;
     }
     public static Border Card(UIElement child, Thickness? padding = null) => new()
     {
@@ -150,8 +179,9 @@ public static class Ui
     {
         var window = new Window { Owner = owner, Title = title, Width = 420, SizeToContent = SizeToContent.Height, ResizeMode = ResizeMode.NoResize, WindowStartupLocation = WindowStartupLocation.CenterOwner };
         var panel = new StackPanel { Margin = new(26) };
-        panel.Children.Add(Text(label));
+        var caption = Text(label); panel.Children.Add(caption);
         var input = new TextBox { Margin = new(0, 12, 0, 20), MaxLength = 24, Text = initial };
+        LabelInput(input, caption);
         panel.Children.Add(input);
         var ok = Button("保存", () => { if (!string.IsNullOrWhiteSpace(input.Text)) window.DialogResult = true; }, true);
         ok.IsDefault = true;
