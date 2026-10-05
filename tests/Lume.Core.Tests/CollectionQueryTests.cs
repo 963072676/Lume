@@ -1,4 +1,5 @@
 using Lume.Core;
+using System.Globalization;
 
 static class CollectionQueryTests
 {
@@ -162,8 +163,29 @@ static class CollectionQueryTests
             Check(result["a"].Single() == a && result["b"].Single() == b && ReferenceEquals(result["a"], result["c"]));
             queries["a"] = ""; queries["b"] = ""; queries["c"] = "missing";
             var next = o.QueryCollectionViews(queries);
-            Check(next["a"].Select(f => f.Name).SequenceEqual([a.Name, b.Name]) && next["b"].Select(f => f.Name).SequenceEqual([b.Name, a.Name]) && next["c"].Count == 0);
+            var names = string.Compare(a.Name, b.Name, StringComparison.CurrentCulture) <= 0 ? new[] { a.Name, b.Name } : [b.Name, a.Name];
+            Check(next["a"].Select(f => f.Name).SequenceEqual(names) && next["b"].Select(f => f.Name).SequenceEqual([b.Name, a.Name]) && next["c"].Count == 0);
             Check(result["a"].Count == 1 && result["b"].Single() == b);
+        });
+        test("批量卡片查询在中英文区域均保留当地名称排序及独立大小排序", () =>
+        {
+            var previousCulture = CultureInfo.CurrentCulture;
+            try
+            {
+                foreach (var name in new[] { "zh-CN", "en-US" })
+                {
+                    var culture = CultureInfo.GetCultureInfo(name); CultureInfo.CurrentCulture = culture;
+                    var o = Create("culture-" + name); var folder = Path.Combine(root, "culture-views-" + name);
+                    o.State.Configuration.Collections.AddRange([new("a", "A", "#92C7B5", MappedPath: folder), new("b", "B", "#92C7B5", MappedPath: folder), new("c", "C", "#92C7B5", MappedPath: folder)]);
+                    var a = Item(folder, "中文-alpha.txt", size: 3); var b = Item(folder, "beta.png", size: 1);
+                    o.ApplyScan(new([a, b], []), false); o.SetOptions("b", new(Sort: "size"));
+                    var result = o.QueryCollectionViews(new Dictionary<string, string> { ["a"] = "", ["b"] = "", ["c"] = "" });
+                    var byName = result["a"];
+                    Check(byName.Count == 2 && culture.CompareInfo.Compare(byName[0].Name, byName[1].Name, CompareOptions.None) <= 0);
+                    Check(result["b"].SequenceEqual([b, a]) && ReferenceEquals(byName, result["c"]));
+                }
+            }
+            finally { CultureInfo.CurrentCulture = previousCulture; }
         });
         test("独立搜索批次保持最近40项优先再筛选及普通分区来源关键词", () =>
         {
