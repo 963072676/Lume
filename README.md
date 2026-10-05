@@ -19,7 +19,7 @@
 | `Lume-<版本>-win-x64.zip` | 完整便携版，自带运行环境，解压即用 |
 | `Lume-<版本>-win-x64-lite.zip` | 精简版，需要 .NET 10 Windows Desktop Runtime x64 |
 
-适用于 Windows 10 2004 及以上、Windows 11，x64。解压后运行 `Lume.exe`，保留同目录的 DLL 和 `shell-extension.txt`。
+面向 Windows x64，推荐使用仍在 [.NET 10 支持范围](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md#windows)内的 Windows 11。Windows 10 需核对具体版本及企业 / LTSC 类型；`19041` 编译 API 目标不代表 Windows 10 2004 及以上全部受支持，逐版验收范围见[支持与已知问题](docs/支持与已知问题.md)。解压后运行 `Lume.exe`，保留同目录的 DLL 和 `shell-extension.txt`。
 程序默认显示桌面分区并驻留托盘，双击托盘图标打开管理窗口；关闭窗口继续运行，托盘退出恢复 Windows 原桌面。请保留 `Lume.Guard.exe`，它负责异常退出后的桌面恢复。
 
 预览版的回收站实物清空、真实休眠、多屏和 Explorer 重启验收尚未完成，环境边界及故障处理见[支持与已知问题](docs/支持与已知问题.md)。上方截图来自 beta.5 的隔离演示，使用虚构文件；主题实渲染截图见[主题预览](docs/主题预览.md)。
