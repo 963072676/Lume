@@ -39,13 +39,15 @@ internal sealed class DesktopCardWindow : Window
     private readonly Button lockButton;
     public CardPlacement Placement => organizer.Options(CollectionId).Collapsed ? placement with { Height = 58 } : placement;
     public string CollectionId { get; }
+    internal string FileQuery => search.Text;
     public IntPtr Handle { get; private set; }
     public bool GlassApplied { get; private set; }
     public bool NativeGlassApplied { get; private set; }
 
     public DesktopCardWindow(Organizer organizer, Collection collection, CardPlacement placement, IntPtr desktop,
         Func<DesktopFile, TileSelection, UIElement> tileFactory, Action refresh, Action settings, Action<string> archive,
-        Func<string, CardPlacement, string, CardPlacement>? adjust = null, Action? finishAdjustment = null)
+        Func<string, CardPlacement, string, CardPlacement>? adjust = null, Action? finishAdjustment = null,
+        IReadOnlyList<DesktopFile>? initialFiles = null)
     {
         this.organizer = organizer; this.tileFactory = tileFactory; this.refresh = refresh; this.placement = placement; this.desktop = desktop; CollectionId = collection.Id;
         System.Windows.Automation.AutomationProperties.SetName(search, "搜索此分区的文件");
@@ -160,7 +162,7 @@ internal sealed class DesktopCardWindow : Window
             DesktopNative.Attach(Handle, desktop);
             HwndSource.FromHwnd(Handle).AddHook(Hook);
         };
-        Loaded += (_, _) => { Position(); ApplyGlass(); UpdateFiles(true); }; Closed += (_, _) => this.finishAdjustment();
+        Loaded += (_, _) => { Position(); ApplyGlass(); var firstFiles = initialFiles; initialFiles = null; UpdateFiles(true, firstFiles); }; Closed += (_, _) => this.finishAdjustment();
     }
     private void ToggleCollapsed() { organizer.SetOptions(CollectionId, organizer.Options(CollectionId) with { Collapsed = !organizer.Options(CollectionId).Collapsed }); UpdateFiles(true); }
     private void ToggleSearch()
@@ -199,7 +201,7 @@ internal sealed class DesktopCardWindow : Window
         GlassApplied = NativeGlassApplied || backdrop.Background != null;
         tint.Background = Tokens.Alpha(Tokens.Glass, configured);
     }
-    public void UpdateFiles(bool force = false)
+    public void UpdateFiles(bool force = false, IReadOnlyList<DesktopFile>? queriedFiles = null)
     {
         var collection = organizer.State.Configuration.Collections.First(c => c.Id == CollectionId);
         var options = organizer.Options(CollectionId);
@@ -215,7 +217,7 @@ internal sealed class DesktopCardWindow : Window
         System.Windows.Automation.AutomationProperties.SetName(lockButton, options.Locked ? "解除锁定分区" : "锁定分区");
         Position();
         title.Text = collection.Name; title.TextWrapping = TextWrapping.NoWrap; title.TextTrimming = TextTrimming.CharacterEllipsis; title.ToolTip = collection.MappedPath ?? collection.Name;
-        var all = organizer.CollectionFiles(CollectionId, search.Text);
+        var all = queriedFiles ?? organizer.CollectionFiles(CollectionId, search.Text);
         if (countBadge.Child is TextBlock count) count.Text = all.Count.ToString();
         if (options.Collapsed)
         {

@@ -50,17 +50,28 @@ public sealed partial class Organizer
     }
 
     public IReadOnlyDictionary<string, IReadOnlyList<DesktopFile>> QueryCollections(IEnumerable<string> ids, string query = "")
+        => QueryViews(ids.Distinct(StringComparer.Ordinal).Select(id => KeyValuePair.Create(id, query)));
+
+    /// <summary>Shares this batch's grouping and sorting while keeping each view's search independent.</summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<DesktopFile>> QueryCollectionViews(IReadOnlyDictionary<string, string> queries)
     {
-        var catalog = Catalog(); var terms = RuleEngine.SearchTerms(query);
+        ArgumentNullException.ThrowIfNull(queries);
+        return QueryViews(queries);
+    }
+
+    private IReadOnlyDictionary<string, IReadOnlyList<DesktopFile>> QueryViews(IEnumerable<KeyValuePair<string, string>> queries)
+    {
+        var catalog = Catalog();
         var active = catalog.Collections.Values.Select(c => (catalog.Buckets[c.Id], SortKey(c, Options(c.Id)))).ToHashSet();
         foreach (var key in catalog.Sorted.Keys.Where(k => !active.Contains(k)).ToArray())
         {
             catalog.SortedReferences -= catalog.Sorted[key].Count; catalog.Sorted.Remove(key);
         }
         var sorted = new Dictionary<(List<DesktopFile> Source, SortViewKey Sort), IReadOnlyList<DesktopFile>>(catalog.Sorted);
-        var filtered = terms.Length == 0 ? null : new Dictionary<IReadOnlyList<DesktopFile>, IReadOnlyList<DesktopFile>>();
+        Dictionary<(IReadOnlyList<DesktopFile> View, string Query), IReadOnlyList<DesktopFile>>? filtered = null;
+        var parsed = new Dictionary<string, string[]>(StringComparer.Ordinal);
         var result = new Dictionary<string, IReadOnlyList<DesktopFile>>(StringComparer.Ordinal);
-        foreach (var id in ids.Distinct(StringComparer.Ordinal))
+        foreach (var (id, query) in queries)
         {
             if (!catalog.Collections.TryGetValue(id, out var collection)) throw new InvalidOperationException("分区已不存在，请刷新。");
             var options = Options(id);
@@ -71,10 +82,12 @@ public sealed partial class Organizer
                 if (ReferenceEquals(collectionCatalog, catalog) && catalog.SortedReferences + view.Count <= MaximumCatalogReferences)
                 { catalog.Sorted[key] = view; catalog.SortedReferences += view.Count; }
             }
-            if (filtered == null) result[id] = view;
+            if (!parsed.TryGetValue(query, out var terms)) parsed[query] = terms = RuleEngine.SearchTerms(query);
+            if (terms.Length == 0) result[id] = view;
             else
             {
-                if (!filtered.TryGetValue(view, out var matches)) filtered[view] = matches = Array.AsReadOnly(view.Where(f => RuleEngine.Search(f, terms)).ToArray());
+                filtered ??= [];
+                if (!filtered.TryGetValue((view, query), out var matches)) filtered[(view, query)] = matches = Array.AsReadOnly(view.Where(f => RuleEngine.Search(f, terms)).ToArray());
                 result[id] = matches;
             }
         }

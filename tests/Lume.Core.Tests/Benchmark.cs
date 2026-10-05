@@ -151,6 +151,29 @@ internal static class Benchmark
                         allocatedBytes = measurement.Bytes, maxMs = 1000, maxAllocatedBytes = 8 * 1024 * 1024, passed = ok });
                 }
             }
+            foreach (var cards in new[] { 5, 30 })
+            {
+                var state = AppState.Create([]); var now = DateTime.UtcNow; const int count = 100000;
+                state.Configuration.Collections = Enumerable.Range(0, cards).Select(i => new Collection(i == 0 ? "inbox" : "card-" + i, "card " + i, "#92C7B5")).ToList();
+                state.Configuration.Rules.Clear();
+                var files = Enumerable.Range(0, count).Select(i => new DesktopFile(Path.Combine(root, $"card-query-{i:D6}.txt"), $"card-query-{i:D6}.txt", ".txt", i, now, now, false, "synthetic")).ToList();
+                var organizer = new Organizer(new StateStore(Path.Combine(root, "card-query-" + cards + ".json")), state); organizer.ApplyScan(new(files, []), false);
+                for (var i = 0; i < count; i++) state.Assignments[files[i].Path] = state.Configuration.Collections[i % cards].Id;
+                foreach (var mixed in new[] { false, true })
+                {
+                    var queries = state.Configuration.Collections.Select((c, i) => (c.Id, Query: mixed && i % 3 == 1 ? "missing" : mixed && i % 3 == 2 ? "card-query txt" : ""))
+                        .ToDictionary(p => p.Id, p => p.Query, StringComparer.Ordinal);
+                    var expected = files.Count(f => queries[state.Assignments[f.Path]] != "missing");
+                    var measurement = Measure(() =>
+                    {
+                        var views = organizer.QueryCollectionViews(queries);
+                        if (views.Sum(p => p.Value.Count) != expected) throw new InvalidOperationException("独立卡片批次查询结果不正确");
+                    });
+                    var ok = measurement.Milliseconds < 1000 && measurement.Bytes < 8 * 1024 * 1024; passed &= ok;
+                    rows.Add(new { scenario = "desktop-card-query", count, cards, mixedSearch = mixed, cached = false, medianMs = measurement.Milliseconds,
+                        allocatedBytes = measurement.Bytes, maxMs = 1000, maxAllocatedBytes = 8 * 1024 * 1024, passed = ok });
+                }
+            }
             var result = new { passed, framework = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription, os = Environment.OSVersion.Version.ToString(), processors = Environment.ProcessorCount, samples = 7, rows };
             File.WriteAllText(output, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
             Console.WriteLine(passed ? $"PASS 性能回归（{rows.Count} 场景，7 次采样）" : "FAIL 性能回归，见结果文件");

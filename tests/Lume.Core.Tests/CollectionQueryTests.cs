@@ -151,5 +151,49 @@ static class CollectionQueryTests
             var after = o.QueryCollections(ids); Check(after["inbox"].Single().Size == 999 && after["a"].Count == 0 && after["b"].Count == 0);
             Check(before.Sum(p => p.Value.Count) == 26003 && before["inbox"].First().Size == 0);
         });
+        test("独立分区搜索批量查询保持不同关键词与排序且同批相同映射共享", () =>
+        {
+            var o = Create("independent-views"); var folder = Path.Combine(root, "independent-views");
+            o.State.Configuration.Collections.AddRange([new("a", "A", "#92C7B5", MappedPath: folder), new("b", "B", "#92C7B5", MappedPath: folder), new("c", "C", "#92C7B5", MappedPath: folder)]);
+            var a = Item(folder, "中文-alpha.txt", size: 3); var b = Item(folder, "beta.png", size: 1);
+            o.ApplyScan(new([a, b], []), false); o.SetOptions("b", new(Sort: "size"));
+            var queries = new Dictionary<string, string> { ["a"] = "中文 TXT", ["b"] = "png", ["c"] = "中文 TXT" };
+            var result = o.QueryCollectionViews(queries);
+            Check(result["a"].Single() == a && result["b"].Single() == b && ReferenceEquals(result["a"], result["c"]));
+            queries["a"] = ""; queries["b"] = ""; queries["c"] = "missing";
+            var next = o.QueryCollectionViews(queries);
+            Check(next["a"].Select(f => f.Name).SequenceEqual([a.Name, b.Name]) && next["b"].Select(f => f.Name).SequenceEqual([b.Name, a.Name]) && next["c"].Count == 0);
+            Check(result["a"].Count == 1 && result["b"].Single() == b);
+        });
+        test("独立搜索批次保持最近40项优先再筛选及普通分区来源关键词", () =>
+        {
+            var o = Create("independent-recent"); o.AddRecentCollection();
+            var recent = o.State.Configuration.Collections.Single(c => c.Recent).Id;
+            var files = Enumerable.Range(0, 50).Select(i => Item(root, $"views-{i:D2}.txt", i) with { Source = "独立来源" }).ToList();
+            o.ApplyScan(new(files, []));
+            var result = o.QueryCollectionViews(new Dictionary<string, string> { [recent] = "views-49", ["work"] = "views-49\t独立来源" });
+            Check(result[recent].Count == 0 && result["work"].Single() == files[49]);
+        });
+        test("独立查询拒绝不存在分区与空参数并返回只读结果", () =>
+        {
+            var o = Create("independent-invalid"); o.ApplyScan(new([Item(root, "views.txt")], []));
+            Throws<ArgumentNullException>(() => o.QueryCollectionViews(null!));
+            Throws<InvalidOperationException>(() => o.QueryCollectionViews(new Dictionary<string, string> { ["gone"] = "" }));
+            var result = o.QueryCollectionViews(new Dictionary<string, string> { ["work"] = "\u3000\t" });
+            Check(result["work"].Count == 1 && o.QueryCollectionViews(new Dictionary<string, string>()).Count == 0);
+            Throws<NotSupportedException>(() => ((IDictionary<string, IReadOnlyList<DesktopFile>>)result).Clear());
+            Throws<NotSupportedException>(() => ((IList<DesktopFile>)result["work"]).Clear());
+        });
+        test("超大独立查询不长留排序与搜索视图且新扫描更新所有分区", () =>
+        {
+            var o = Create("independent-large"); var folder = Path.Combine(root, "independent-large");
+            o.State.Configuration.Collections.AddRange([new("a", "A", "#92C7B5", MappedPath: folder), new("b", "B", "#92C7B5", MappedPath: folder)]);
+            var files = Enumerable.Range(0, 26001).Select(i => Item(folder, $"views-{i:D5}.txt")).ToList(); o.ApplyScan(new(files, []), false);
+            var queries = new Dictionary<string, string> { ["a"] = "views txt", ["b"] = "views-00000" };
+            var before = o.QueryCollectionViews(queries); var repeat = o.QueryCollectionViews(queries);
+            Check(before["a"].Count == files.Count && before["b"].Single() == files[0] && !ReferenceEquals(before["a"], repeat["a"]));
+            o.ApplyScan(new([files[0] with { Size = 77 }], []), false); var next = o.QueryCollectionViews(queries);
+            Check(next["a"].Single().Size == 77 && next["b"].Single().Size == 77 && before["a"].Count == 26001 && before["b"].Single().Size == 1);
+        });
     }
 }

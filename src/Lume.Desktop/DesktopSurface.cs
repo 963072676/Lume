@@ -92,13 +92,15 @@ internal sealed class DesktopSurface : IDisposable
         var area = Forms.Screen.PrimaryScreen!.WorkingArea;
         var width = 320; var height = 220; var columns = Math.Max(1, (area.Width - 48) / (width + 18));
         var selected = organizer.State.Configuration.Collections.Where(c => organizer.State.Desktop.Mode == 0 || organizer.State.Desktop.Mode == 1 && c.InWork || organizer.State.Desktop.Mode == 2 && c.InPresentation).ToList();
+        if (selected.Count == 0) { RefreshSystemEntries(); return; }
+        var initialViews = organizer.QueryCollections(selected.Select(c => c.Id));
         var dpiContext = DesktopNative.SetThreadDpiAwarenessContext(DesktopNative.GetWindowDpiAwarenessContext(view));
         try
         {
             for (var i = 0; i < selected.Count; i++)
             {
                 var c = selected[i]; var position = organizer.State.Desktop.Positions.GetValueOrDefault(c.Id) ?? new(area.Left + 24 + (i % columns) * (width + 18), area.Top + 28 + (i / columns) * (height + 18), width, height);
-                var card = new DesktopCardWindow(organizer, c, position, view, tile, refresh, settings, archive, Adjust, () => guides.Dispose()); cards.Add(card); card.Show();
+                var card = new DesktopCardWindow(organizer, c, position, view, tile, refresh, settings, archive, Adjust, () => guides.Dispose(), initialViews[c.Id]); cards.Add(card); card.Show();
             }
         }
         finally { DesktopNative.SetThreadDpiAwarenessContext(dpiContext); }
@@ -120,11 +122,18 @@ internal sealed class DesktopSurface : IDisposable
     {
         if (paused || disposed || rebuilding || view == IntPtr.Zero) return;
         var ids = organizer.State.Configuration.Collections.Where(c => organizer.State.Desktop.Mode == 0 || organizer.State.Desktop.Mode == 1 && c.InWork || organizer.State.Desktop.Mode == 2 && c.InPresentation).Select(c => c.Id);
-        if (!ids.SequenceEqual(cards.Select(c => c.CollectionId))) { CloseCards(); CreateCards(); }
-       foreach (var card in cards) { card.UpdateFiles(); card.ApplyGlass(); }
+        if (!ids.SequenceEqual(cards.Select(c => c.CollectionId))) { CloseCards(); CreateCards(); return; }
+       RefreshCardFiles(organizer, cards);
+       foreach (var card in cards) card.ApplyGlass();
        RefreshSystemEntries();
         systemEntries?.ApplyGlass();
    }
+    internal static void RefreshCardFiles(Organizer organizer, IReadOnlyList<DesktopCardWindow> cards)
+    {
+        if (cards.Count == 0) return;
+        var views = organizer.QueryCollectionViews(cards.ToDictionary(c => c.CollectionId, c => c.FileQuery, StringComparer.Ordinal));
+        foreach (var card in cards) card.UpdateFiles(queriedFiles: views[card.CollectionId]);
+    }
     private CardPlacement Adjust(string id, CardPlacement requested, string edges)
     {
         var screen = Forms.Screen.FromPoint(new System.Drawing.Point(requested.X + requested.Width / 2, requested.Y + Math.Min(40, requested.Height / 2))).WorkingArea;

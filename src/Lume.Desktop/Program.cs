@@ -33,6 +33,7 @@ public static class Program
         if (args.Contains("--retention-self-test")) return ReferenceRetentionVerification.Run();
         if (args.Contains("--palette-self-test")) return CommandPalette.RunVerification();
         if (args.Contains("--accessibility-self-test")) return AccessibilityVerification.Run();
+        if (args.Contains("--card-query-self-test")) return DesktopCardQueryVerification.Run();
         if (args.Contains("--menu-self-test")) return DesktopMenuVerification.Run();
         if (args.Contains("--icons-self-test")) return IconVerification.Run();
         if (args.Contains("--features-self-test")) return FeatureVerification.Run(!args.Contains("--no-input"));
