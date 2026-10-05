@@ -25,9 +25,7 @@ public static class Program
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
     private static int RunApplication(string[] args)
     {
-        try { if (PackageIsolation.RelaunchIfNeeded(args)) return 0; }
-        catch (Exception ex) { MessageBox.Show(ex.Message, "Lume 启动环境修复失败"); return 1; }
-        if (args.FirstOrDefault() == "--guard") return DesktopRecovery.Guard(args);
+        // Verification and rejected test flags must precede any real-data environment probe or relaunch.
 #if VERIFICATION
         if (args.Contains("--performance-self-test")) return MainWindow.RunPerformanceVerification(args);
         if (args.Contains("--reliability-self-test")) return ReliabilityVerification.Run();
@@ -39,6 +37,9 @@ public static class Program
 #else
         if (args.Any(arg => arg.Contains("self-test", StringComparison.Ordinal) || arg.Contains("smoke", StringComparison.Ordinal))) return 2;
 #endif
+        try { if (PackageIsolation.RelaunchIfNeeded(args)) return 0; }
+        catch (Exception ex) { MessageBox.Show(ex.Message, "Lume 启动环境修复失败"); return 1; }
+        if (args.FirstOrDefault() == "--guard") return DesktopRecovery.Guard(args);
         if (args.Contains("--stop")) { if (EventWaitHandle.TryOpenExisting("Local\\Lume.Stop", out var stop)) { using (stop) stop.Set(); } return 0; }
         var desktopSmoke = args.Contains("--desktop-smoke");
         var demo = args.Contains("--demo") || args.Contains("--smoke") || desktopSmoke;
