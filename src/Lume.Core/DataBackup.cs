@@ -20,7 +20,7 @@ public static class DataBackup
     private static bool Allowed(string name)
     {
         if (string.IsNullOrEmpty(name) || name.Contains('\\') || name.StartsWith('/') || name.Split('/').Any(s => s is "" or "." or ".." || s.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)) return false;
-        if (!name.Contains('/')) return name == "ai-settings.json" || name == "state.json" || (name.StartsWith("state.json.", StringComparison.Ordinal) && !name.EndsWith(".tmp", StringComparison.Ordinal));
+        if (!name.Contains('/')) return name is "ai-settings.json" or "layout-before-restore.json" or "state.json" || (name.StartsWith("state.json.", StringComparison.Ordinal) && !name.EndsWith(".tmp", StringComparison.Ordinal));
         var parts = name.Split('/');
         return parts.Length == 2 && (parts[0] == "state.json.history" && parts[1].Length == 69 && parts[1].EndsWith(".json", StringComparison.Ordinal) && parts[1][..64].All(Uri.IsHexDigit)
             || parts[0] == "archive-journal" && (parts[1].EndsWith(".json", StringComparison.Ordinal) || parts[1].EndsWith(".json.bak", StringComparison.Ordinal) || parts[1].Contains(".json.corrupt-", StringComparison.Ordinal)));

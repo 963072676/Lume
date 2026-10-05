@@ -56,6 +56,7 @@ internal static class ReliabilityTests
             var (directory, store, organizer) = Create("full-backup");
             for (var i = 0; i < 205; i++) organizer.State.History.Add(new() { Title = "backup-history-" + i });
             store.Save(organizer.State); organizer.SetTheme("sage");
+            LayoutBackup.Write(Path.Combine(directory, "layout-before-restore.json"), organizer.State.Desktop);
             File.WriteAllText(Path.Combine(directory, "ai-settings.json"), "opaque-protected-settings");
             File.WriteAllText(Path.Combine(directory, "desktop-lease.json"), "runtime-only");
             Directory.CreateDirectory(Path.Combine(directory, "diagnostics")); File.WriteAllText(Path.Combine(directory, "diagnostics", "sample.json"), "runtime-only");
@@ -71,6 +72,7 @@ internal static class ReliabilityTests
             var history = Path.Combine(root, "complete-history.json"); loadedStore.ExportHistory(loaded, history);
             Check(JsonSerializer.Deserialize<List<HistoryEntry>>(File.ReadAllText(history))!.Count == 206);
             Check(File.ReadAllText(Path.Combine(restored, "ai-settings.json")) == "opaque-protected-settings");
+            Check(File.ReadAllBytes(Path.Combine(restored, "layout-before-restore.json")).SequenceEqual(File.ReadAllBytes(Path.Combine(directory, "layout-before-restore.json"))));
         });
         test("完整恢复先校验再替换并保留当前整份数据", () =>
         {
