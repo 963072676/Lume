@@ -4,6 +4,7 @@ public sealed partial class Organizer
 {
     private const int MaximumCatalogReferences = 25000;
     private CollectionCatalog? collectionCatalog;
+    private readonly record struct SortViewKey(string Sort, bool Descending, IReadOnlyList<string>? Order);
     private sealed class CollectionCatalog(AppState state, IReadOnlyList<DesktopFile> files, long revision,
         Dictionary<string, Collection> collections, Dictionary<string, List<DesktopFile>> buckets)
     {
@@ -12,7 +13,8 @@ public sealed partial class Organizer
         internal long Revision { get; } = revision;
         internal Dictionary<string, Collection> Collections { get; } = collections;
         internal Dictionary<string, List<DesktopFile>> Buckets { get; } = buckets;
-        internal Dictionary<string, (CardOptions Options, IReadOnlyList<DesktopFile> Files)> Sorted { get; } = [];
+        internal Dictionary<(List<DesktopFile> Source, SortViewKey Sort), IReadOnlyList<DesktopFile>> Sorted { get; } = [];
+        internal int SortedReferences { get; set; }
     }
 
     private CollectionCatalog Catalog()
@@ -20,14 +22,18 @@ public sealed partial class Organizer
         if (collectionCatalog is { } cached && ReferenceEquals(cached.State, State) && ReferenceEquals(cached.Files, Files) && cached.Revision == contentRevision) return cached;
         var collections = State.Configuration.Collections.ToDictionary(c => c.Id, StringComparer.Ordinal);
         var buckets = collections.Keys.ToDictionary(id => id, _ => new List<DesktopFile>(), StringComparer.Ordinal);
-        var mapped = State.Configuration.Collections.Where(c => c.MappedPath != null)
-            .GroupBy(c => c.MappedPath!, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Select(c => c.Id).ToArray(), StringComparer.OrdinalIgnoreCase);
+        var mapped = new Dictionary<string, List<DesktopFile>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var collection in State.Configuration.Collections.Where(c => c.MappedPath != null))
+        {
+            if (!mapped.TryGetValue(collection.MappedPath!, out var source)) mapped[collection.MappedPath!] = source = [];
+            buckets[collection.Id] = source;
+        }
         var ordinary = State.Configuration.Collections.Where(c => c.MappedPath == null && !c.Recent).Select(c => c.Id).ToHashSet(StringComparer.Ordinal);
         foreach (var file in Files)
         {
             var parent = System.IO.Path.GetDirectoryName(file.Path);
-            var inMapping = parent != null && mapped.TryGetValue(parent, out _);
-            if (inMapping) foreach (var id in mapped[parent!]) buckets[id].Add(file);
+            var inMapping = parent != null && mapped.ContainsKey(parent);
+            if (inMapping) mapped[parent!].Add(file);
             var assignment = CollectionOf(file);
             if (ordinary.Contains(assignment) && (!inMapping || State.Configuration.Overrides.ContainsKey(file.Path))) buckets[assignment].Add(file);
         }
@@ -37,8 +43,8 @@ public sealed partial class Organizer
             foreach (var c in State.Configuration.Collections.Where(c => c.Recent)) buckets[c.Id] = recent;
         }
         var catalog = new CollectionCatalog(State, Files, contentRevision, collections, buckets);
-        // Index and sorted views retain at most two bounded sets of references. Large overlapping mappings stay transient.
-        if (Files.Count <= MaximumCatalogReferences && buckets.Values.Sum(b => (long)b.Count) <= MaximumCatalogReferences) collectionCatalog = catalog;
+        // Aliased mappings/recent views share one bucket. Each cached reference set remains bounded.
+        if (Files.Count <= MaximumCatalogReferences && buckets.Values.Distinct().Sum(b => (long)b.Count) <= MaximumCatalogReferences) collectionCatalog = catalog;
         else collectionCatalog = null;
         return catalog;
     }
@@ -46,21 +52,39 @@ public sealed partial class Organizer
     public IReadOnlyDictionary<string, IReadOnlyList<DesktopFile>> QueryCollections(IEnumerable<string> ids, string query = "")
     {
         var catalog = Catalog(); var terms = RuleEngine.SearchTerms(query);
+        var active = catalog.Collections.Values.Select(c => (catalog.Buckets[c.Id], SortKey(c, Options(c.Id)))).ToHashSet();
+        foreach (var key in catalog.Sorted.Keys.Where(k => !active.Contains(k)).ToArray())
+        {
+            catalog.SortedReferences -= catalog.Sorted[key].Count; catalog.Sorted.Remove(key);
+        }
+        var sorted = new Dictionary<(List<DesktopFile> Source, SortViewKey Sort), IReadOnlyList<DesktopFile>>(catalog.Sorted);
+        var filtered = terms.Length == 0 ? null : new Dictionary<IReadOnlyList<DesktopFile>, IReadOnlyList<DesktopFile>>();
         var result = new Dictionary<string, IReadOnlyList<DesktopFile>>(StringComparer.Ordinal);
         foreach (var id in ids.Distinct(StringComparer.Ordinal))
         {
             if (!catalog.Collections.TryGetValue(id, out var collection)) throw new InvalidOperationException("分区已不存在，请刷新。");
             var options = Options(id);
-            if (!catalog.Sorted.TryGetValue(id, out var cached) || cached.Options != options)
+            var source = catalog.Buckets[id]; var key = (source, SortKey(collection, options));
+            if (!sorted.TryGetValue(key, out var view))
             {
-                var source = catalog.Buckets[id];
-                cached = (options, Array.AsReadOnly(collection.Recent ? source.ToArray() : SortCollection(source, options).ToArray()));
-                catalog.Sorted[id] = cached;
+                view = Array.AsReadOnly(collection.Recent ? source.ToArray() : SortCollection(source, options).ToArray()); sorted[key] = view;
+                if (ReferenceEquals(collectionCatalog, catalog) && catalog.SortedReferences + view.Count <= MaximumCatalogReferences)
+                { catalog.Sorted[key] = view; catalog.SortedReferences += view.Count; }
             }
-            result[id] = terms.Length == 0 ? cached.Files : Array.AsReadOnly(cached.Files.Where(f => RuleEngine.Search(f, terms)).ToArray());
+            if (filtered == null) result[id] = view;
+            else
+            {
+                if (!filtered.TryGetValue(view, out var matches)) filtered[view] = matches = Array.AsReadOnly(view.Where(f => RuleEngine.Search(f, terms)).ToArray());
+                result[id] = matches;
+            }
         }
         return new System.Collections.ObjectModel.ReadOnlyDictionary<string, IReadOnlyList<DesktopFile>>(result);
     }
+
+    private static SortViewKey SortKey(Collection collection, CardOptions options) => collection.Recent
+        ? new("recent", false, null)
+        : options.Sort == "manual" ? new("manual", false, options.Order)
+        : new(options.Sort is "type" or "size" or "modified" ? options.Sort : "name", options.Descending, null);
 
     private static IEnumerable<DesktopFile> SortCollection(IEnumerable<DesktopFile> source, CardOptions options)
     {

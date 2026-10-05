@@ -108,6 +108,29 @@ internal static class Benchmark
                         baselineMs = baseline.Milliseconds, baselineAllocatedBytes = baseline.Bytes, maxMs = 250, maxAllocatedBytes = 16 * 1024, passed = ok });
                 }
             }
+            foreach (var allMappings in new[] { false, true })
+            {
+                var state = AppState.Create([]); var now = DateTime.UtcNow; const int count = 10000; const int maps = 60;
+                var folder = Path.Combine(root, "overlap"); state.Configuration.Rules.Clear();
+                state.Configuration.Collections.AddRange(Enumerable.Range(0, maps).Select(i => new Collection("map-" + i, "mapped " + i, "#92C7B5", MappedPath: folder)));
+                var files = Enumerable.Range(0, count).Select(i => new DesktopFile(Path.Combine(folder, $"mapped-{i:D5}.txt"), $"mapped-{i:D5}.txt", ".txt", i, now, now, false, "synthetic")).ToList();
+                var organizer = new Organizer(new StateStore(Path.Combine(root, "overlap-" + allMappings + ".json")), state); organizer.ApplyScan(new(files, []), false);
+                var ids = allMappings ? state.Configuration.Collections.Select(c => c.Id).ToArray() : new[] { "map-0" };
+                void Query()
+                {
+                    var result = organizer.QueryCollections(ids, "mapped txt");
+                    if (result.Sum(p => (long)p.Value.Count) != count * (allMappings ? maps : 1L)) throw new InvalidOperationException("重叠映射查询丢失结果");
+                    if (allMappings && !ReferenceEquals(result["map-0"], result["map-59"])) throw new InvalidOperationException("相同映射筛选未共享");
+                }
+                foreach (var cold in new[] { false, true })
+                {
+                    var measurement = Measure(() => { if (cold) organizer.ApplyScan(new(files, []), false); Query(); });
+                    var maxMs = cold ? 500 : 100; var maxBytes = cold ? 8 * 1024 * 1024 : 1024 * 1024;
+                    var ok = measurement.Milliseconds < maxMs && measurement.Bytes < maxBytes; passed &= ok;
+                    rows.Add(new { scenario = "overlapping-mappings", count, mappings = maps, queriedCollections = ids.Length, cold, medianMs = measurement.Milliseconds,
+                        allocatedBytes = measurement.Bytes, maxMs, maxAllocatedBytes = maxBytes, passed = ok });
+                }
+            }
             var result = new { passed, framework = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription, os = Environment.OSVersion.Version.ToString(), processors = Environment.ProcessorCount, samples = 7, rows };
             File.WriteAllText(output, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
             Console.WriteLine(passed ? $"PASS 性能回归（{rows.Count} 场景，7 次采样）" : "FAIL 性能回归，见结果文件");
