@@ -17,8 +17,7 @@ $cpp = Join-Path $root 'src/Lume.Shell/LumeShell.cpp'
 $vcvars = Join-Path $vs 'VC/Auxiliary/Build/vcvars64.bat'
 $definition = Join-Path $root 'src/Lume.Shell/LumeShell.def'
 $command = 'call "{0}" >nul && cl /nologo /LD /MT /O2 /W4 /WX /EHsc /utf-8 /std:c++17 /I"{1}" "{2}" /Fe:Lume.Shell.dll /link shell32.lib shlwapi.lib ole32.lib user32.lib gdi32.lib advapi32.lib uuid.lib /Brepro /DEF:"{3}"' -f $vcvars,$build,$cpp,$definition
-Push-Location $build
-try { & $env:ComSpec /d /c $command; if ($LASTEXITCODE -ne 0) { throw '原生菜单编译失败。' } } finally { Pop-Location }
+& (Join-Path $PSScriptRoot 'invoke-native-build.ps1') -WorkingDirectory $build -Command $command -FailureMessage '原生菜单编译失败。'
 $dll = Join-Path $build 'Lume.Shell.dll'
 $hash = (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash.Substring(0,16).ToLowerInvariant()
 $name = 'Lume.Shell.' + $hash + '.dll'
@@ -29,7 +28,6 @@ Set-Content -LiteralPath (Join-Path $OutputPath 'shell-extension.txt') -Value $n
 Write-Output ('原生菜单：' + $target)
 $guard = Join-Path $root 'src/Lume.Shell/LumeGuard.cpp'
 $guardCommand = 'call "{0}" >nul && cl /nologo /MT /O2 /W4 /WX /EHsc /utf-8 /std:c++17 "{1}" /Fe:Lume.Guard.exe /link shell32.lib user32.lib /SUBSYSTEM:WINDOWS /Brepro' -f $vcvars,$guard
-Push-Location $build
-try { & $env:ComSpec /d /c $guardCommand; if ($LASTEXITCODE -ne 0) { throw '原生恢复保护进程编译失败。' } } finally { Pop-Location }
+& (Join-Path $PSScriptRoot 'invoke-native-build.ps1') -WorkingDirectory $build -Command $guardCommand -FailureMessage '原生恢复保护进程编译失败。'
 Copy-Item -LiteralPath (Join-Path $build 'Lume.Guard.exe') -Destination $OutputPath -Force
 Write-Output ('原生恢复保护：' + (Join-Path $OutputPath 'Lume.Guard.exe'))

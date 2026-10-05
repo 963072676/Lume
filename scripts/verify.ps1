@@ -8,6 +8,8 @@ $appDirectory = Join-Path $projectRoot 'artifacts/verification-app'
 New-Item -ItemType Directory -Path $evidence -Force | Out-Null
 & $DotnetPath run --project (Join-Path $projectRoot 'tests/Lume.Core.Tests') -c Release 2>&1 | Tee-Object -FilePath (Join-Path $evidence 'core-tests.txt')
 if ($LASTEXITCODE -ne 0) { throw '核心回归失败。' }
+& (Join-Path $PSScriptRoot 'test-native-build-pipeline.ps1')
+Copy-Item -LiteralPath (Join-Path $projectRoot 'artifacts/native-pipeline-result.json') -Destination $evidence
 & (Join-Path $PSScriptRoot 'test-soak-status.ps1')
 Copy-Item -LiteralPath (Join-Path $projectRoot 'artifacts/soak-status-result.json') -Destination $evidence
 if (!$SkipBuild) { & (Join-Path $PSScriptRoot 'build.ps1') -DotnetPath $DotnetPath -Verification 2>&1 | Tee-Object -FilePath (Join-Path $evidence 'build.txt') }
