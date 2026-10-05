@@ -31,7 +31,7 @@ public sealed partial class Organizer
         var ordinary = State.Configuration.Collections.Where(c => c.MappedPath == null && !c.Recent).Select(c => c.Id).ToHashSet(StringComparer.Ordinal);
         foreach (var file in Files)
         {
-            var parent = System.IO.Path.GetDirectoryName(file.Path);
+            var parent = mapped.Count == 0 ? null : System.IO.Path.GetDirectoryName(file.Path);
             var inMapping = parent != null && mapped.ContainsKey(parent);
             if (inMapping) mapped[parent!].Add(file);
             var assignment = CollectionOf(file);
@@ -95,10 +95,12 @@ public sealed partial class Organizer
             return source.OrderBy(f => order.GetValueOrDefault(f.Path, int.MaxValue)).ThenBy(f => f.Name);
         }
         IOrderedEnumerable<DesktopFile> SortBy<T>(Func<DesktopFile, T> key) => options.Descending ? source.OrderByDescending(key) : source.OrderBy(key);
-        return (options.Sort switch
+        return options.Sort switch
         {
-            "modified" => SortBy(f => f.ModifiedUtc), "size" => SortBy(f => f.Size),
-            "type" => SortBy(f => f.Extension), _ => SortBy(f => f.Name)
-        }).ThenBy(f => f.Name);
+            "modified" => SortBy(f => f.ModifiedUtc).ThenBy(f => f.Name),
+            "size" => SortBy(f => f.Size).ThenBy(f => f.Name),
+            "type" => SortBy(f => f.Extension).ThenBy(f => f.Name),
+            _ => SortBy(f => f.Name)
+        };
     }
 }

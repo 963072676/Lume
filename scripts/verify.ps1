@@ -10,6 +10,8 @@ New-Item -ItemType Directory -Path $evidence -Force | Out-Null
 if ($LASTEXITCODE -ne 0) { throw '核心回归失败。' }
 & (Join-Path $PSScriptRoot 'test-native-build-pipeline.ps1')
 Copy-Item -LiteralPath (Join-Path $projectRoot 'artifacts/native-pipeline-result.json') -Destination $evidence
+& (Join-Path $PSScriptRoot 'test-verification-result.ps1')
+Copy-Item -LiteralPath (Join-Path $projectRoot 'artifacts/verification-result-validation-result.json') -Destination $evidence
 & (Join-Path $PSScriptRoot 'test-soak-status.ps1')
 Copy-Item -LiteralPath (Join-Path $projectRoot 'artifacts/soak-status-result.json') -Destination $evidence
 if (!$SkipBuild) { & (Join-Path $PSScriptRoot 'build.ps1') -DotnetPath $DotnetPath -Verification 2>&1 | Tee-Object -FilePath (Join-Path $evidence 'build.txt') }
@@ -44,8 +46,7 @@ foreach ($stage in $stages) {
         }
         throw ($stage.Name + ' 验收失败，退出码：' + $process.ExitCode)
     }
-    $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
-    if ($result.passed -eq $false) { throw ($stage.Name + ' 未通过。') }
+    $result = & (Join-Path $PSScriptRoot 'read-verification-result.ps1') -ResultPath $resultPath -Stage $stage.Name
     Copy-Item -LiteralPath $resultPath -Destination (Join-Path $evidence ($stage.Name + '-result.json'))
     Write-Output ('PASS ' + $stage.Name)
 }
@@ -53,7 +54,8 @@ $started = [DateTime]::UtcNow
 $process = Start-Process -FilePath (Join-Path $appDirectory 'Lume.exe') -ArgumentList '--performance-self-test' -WindowStyle Hidden -PassThru
 if (!$process.WaitForExit(60000)) { $process.Kill(); throw '性能与目录恢复验收超时。' }
 $result = Get-ChildItem -LiteralPath (Join-Path $appDirectory 'performance-verification') -Recurse -Filter result.json | Where-Object LastWriteTimeUtc -ge $started | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
-if ($process.ExitCode -ne 0 -or !$result -or !(Get-Content -LiteralPath $result.FullName -Raw | ConvertFrom-Json).passed) { throw '性能与目录恢复验收失败。' }
+if ($process.ExitCode -ne 0 -or !$result) { throw '性能与目录恢复验收失败。' }
+& (Join-Path $PSScriptRoot 'read-verification-result.ps1') -ResultPath $result.FullName -Stage '性能与目录恢复' | Out-Null
 Copy-Item -LiteralPath $result.FullName -Destination (Join-Path $evidence 'performance-result.json')
 Get-FileHash -LiteralPath (Join-Path $appDirectory 'Lume.exe') -Algorithm SHA256 | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidence 'verification-binary.json')
 Write-Output ('验收完成：' + $evidence)

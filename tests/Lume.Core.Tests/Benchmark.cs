@@ -131,6 +131,26 @@ internal static class Benchmark
                         allocatedBytes = measurement.Bytes, maxMs, maxAllocatedBytes = maxBytes, passed = ok });
                 }
             }
+            {
+                var state = AppState.Create([]); var now = DateTime.UtcNow; const int count = 100000; const int collections = 60;
+                state.Configuration.Collections = Enumerable.Range(0, collections).Select(i => new Collection(i == 0 ? "inbox" : "group-" + i, "group " + i, "#92C7B5")).ToList();
+                state.Configuration.Rules.Clear(); var folder = Path.Combine(root, new string('d', 96));
+                var files = Enumerable.Range(0, count).Select(i => new DesktopFile(Path.Combine(folder, $"large-query-{i:D6}.txt"), $"large-query-{i:D6}.txt", ".txt", i, now, now, false, "synthetic")).ToList();
+                var organizer = new Organizer(new StateStore(Path.Combine(root, "large-query.json")), state); organizer.ApplyScan(new(files, []), false);
+                var ids = state.Configuration.Collections.Select(c => c.Id).ToArray();
+                for (var i = 0; i < files.Count; i++) state.Assignments[files[i].Path] = ids[i % ids.Length];
+                foreach (var matching in new[] { false, true })
+                {
+                    var measurement = Measure(() =>
+                    {
+                        var result = organizer.QueryCollections(ids, matching ? "large-query txt" : "missing txt");
+                        if (result.Sum(p => p.Value.Count) != (matching ? count : 0)) throw new InvalidOperationException("超大普通分区查询丢失文件");
+                    });
+                    var ok = measurement.Milliseconds < 1000 && measurement.Bytes < 8 * 1024 * 1024; passed &= ok;
+                    rows.Add(new { scenario = "large-ordinary-query", count, collections, matching, cached = false, medianMs = measurement.Milliseconds,
+                        allocatedBytes = measurement.Bytes, maxMs = 1000, maxAllocatedBytes = 8 * 1024 * 1024, passed = ok });
+                }
+            }
             var result = new { passed, framework = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription, os = Environment.OSVersion.Version.ToString(), processors = Environment.ProcessorCount, samples = 7, rows };
             File.WriteAllText(output, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
             Console.WriteLine(passed ? $"PASS 性能回归（{rows.Count} 场景，7 次采样）" : "FAIL 性能回归，见结果文件");

@@ -124,5 +124,32 @@ static class CollectionQueryTests
             Check(!ReferenceEquals(before["a"], o.CollectionFiles("a"))); o.ApplyScan(new([files[0] with { Size = 99 }], []), false);
             var after = o.QueryCollections(["a", "b"]); Check(after["a"].Single().Size == 99 && ReferenceEquals(after["a"], after["b"]) && before["a"].Count == 26000);
         });
+        test("普通分区名称正反排序保留同名文件的扫描先后", () =>
+        {
+            var o = Create("ordinary-name-ties");
+            var first = Item(Path.Combine(root, "first"), "same.txt", size: 3);
+            var second = Item(Path.Combine(root, "second"), "same.txt", size: 1);
+            var a = Item(root, "a.txt"); var z = Item(root, "z.txt");
+            o.ApplyScan(new([first, z, second, a], []));
+            Check(o.CollectionFiles("work").Select(f => f.Path).SequenceEqual([a.Path, first.Path, second.Path, z.Path]));
+            o.SetOptions("work", new(Sort: "name", Descending: true));
+            Check(o.CollectionFiles("work").Select(f => f.Path).SequenceEqual([z.Path, first.Path, second.Path, a.Path]));
+        });
+        test("超大普通分区保持只读快照与新扫描且不长期缓存", () =>
+        {
+            var o = Create("ordinary-large"); o.State.Configuration.Rules.Clear();
+            o.State.Configuration.Collections = [new("inbox", "收件箱", "#92C7B5"), new("a", "A", "#92C7B5"), new("b", "B", "#92C7B5")];
+            var files = Enumerable.Range(0, 26003).Select(i => Item(root, $"ordinary-{i:D5}.txt", size: i)).ToList();
+            o.ApplyScan(new(files, []), false);
+            var ids = new[] { "inbox", "a", "b" };
+            for (var i = 0; i < files.Count; i++) o.State.Assignments[files[i].Path] = ids[i % ids.Length];
+            var before = o.QueryCollections(["inbox", "a", "b", "inbox"], "ordinary txt");
+            Check(before.Count == 3 && before.Sum(p => p.Value.Count) == files.Count);
+            Check(!ReferenceEquals(before["inbox"], o.CollectionFiles("inbox", "ordinary txt")));
+            Throws<NotSupportedException>(() => ((IList<DesktopFile>)before["inbox"]).Clear());
+            o.ApplyScan(new([files[0] with { Size = 999 }], []), false);
+            var after = o.QueryCollections(ids); Check(after["inbox"].Single().Size == 999 && after["a"].Count == 0 && after["b"].Count == 0);
+            Check(before.Sum(p => p.Value.Count) == 26003 && before["inbox"].First().Size == 0);
+        });
     }
 }
