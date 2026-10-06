@@ -23,6 +23,7 @@ $stages = @(
     @{ Flag='--palette-self-test'; Result='palette-verification/latest-result.json'; Name='palette' },
     @{ Flag='--accessibility-self-test'; Result='accessibility-verification/latest-result.json'; Name='accessibility' },
     @{ Flag='--card-query-self-test'; Result='card-query-verification/latest-result.json'; Name='card-query' },
+    @{ Flag='--wallpaper-self-test'; Result='wallpaper-verification/latest-result.json'; Name='wallpaper' },
     @{ Flag='--reliability-self-test'; Result='reliability-verification/latest-result.json'; Name='reliability' },
     @{ Flag='--menu-self-test'; Result='menu-verification/result.json'; Name='menu' },
     @{ Flag='--icons-self-test'; Result='icons-verification/result.json'; Name='icons' },

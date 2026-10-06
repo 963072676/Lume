@@ -94,28 +94,29 @@ internal sealed class DesktopSurface : IDisposable
         var selected = organizer.State.Configuration.Collections.Where(c => organizer.State.Desktop.Mode == 0 || organizer.State.Desktop.Mode == 1 && c.InWork || organizer.State.Desktop.Mode == 2 && c.InPresentation).ToList();
         if (selected.Count == 0) { RefreshSystemEntries(); return; }
         var initialViews = organizer.QueryCollections(selected.Select(c => c.Id));
+        var initialWallpaper = WallpaperGlass.ReadSource();
         var dpiContext = DesktopNative.SetThreadDpiAwarenessContext(DesktopNative.GetWindowDpiAwarenessContext(view));
         try
         {
             for (var i = 0; i < selected.Count; i++)
             {
                 var c = selected[i]; var position = organizer.State.Desktop.Positions.GetValueOrDefault(c.Id) ?? new(area.Left + 24 + (i % columns) * (width + 18), area.Top + 28 + (i / columns) * (height + 18), width, height);
-                var card = new DesktopCardWindow(organizer, c, position, view, tile, refresh, settings, archive, Adjust, () => guides.Dispose(), initialViews[c.Id]); cards.Add(card); card.Show();
+                var card = new DesktopCardWindow(organizer, c, position, view, tile, refresh, settings, archive, Adjust, () => guides.Dispose(), initialViews[c.Id], initialWallpaper); cards.Add(card); card.Show();
             }
         }
         finally { DesktopNative.SetThreadDpiAwarenessContext(dpiContext); }
-        RefreshSystemEntries();
+        RefreshSystemEntries(initialWallpaper);
     }
-    private void RefreshSystemEntries()
+    private void RefreshSystemEntries(WallpaperGlass.Source? wallpaper = null)
     {
         if (paused || disposed || view == IntPtr.Zero) return;
         var entries = SystemDesktopWindow.EnabledEntries();
         var signature = organizer.State.Desktop.ShowSystemEntries + string.Join("|", entries.Select(e => e.Id));
-        if (systemSignature == signature) { systemEntries?.RefreshPlacement(); systemEntries?.RefreshDynamicIcons(); return; }
+        if (systemSignature == signature) { systemEntries?.RefreshPlacement(wallpaper); systemEntries?.RefreshDynamicIcons(); return; }
         systemEntries?.Close(); systemEntries = null; systemSignature = signature;
         if (!organizer.State.Desktop.ShowSystemEntries || entries.Count == 0) return;
        var context = DesktopNative.SetThreadDpiAwarenessContext(DesktopNative.GetWindowDpiAwarenessContext(view));
-        try { systemEntries = new SystemDesktopWindow(organizer, view, settings, entries, Adjust, () => guides.Dispose()); systemEntries.Show(); }
+        try { systemEntries = new SystemDesktopWindow(organizer, view, settings, entries, Adjust, () => guides.Dispose(), initialWallpaper: wallpaper); systemEntries.Show(); }
        finally { DesktopNative.SetThreadDpiAwarenessContext(context); }
     }
     public void Refresh()
@@ -123,16 +124,16 @@ internal sealed class DesktopSurface : IDisposable
         if (paused || disposed || rebuilding || view == IntPtr.Zero) return;
         var ids = organizer.State.Configuration.Collections.Where(c => organizer.State.Desktop.Mode == 0 || organizer.State.Desktop.Mode == 1 && c.InWork || organizer.State.Desktop.Mode == 2 && c.InPresentation).Select(c => c.Id);
         if (!ids.SequenceEqual(cards.Select(c => c.CollectionId))) { CloseCards(); CreateCards(); return; }
-       RefreshCardFiles(organizer, cards);
-       foreach (var card in cards) card.ApplyGlass();
-       RefreshSystemEntries();
-        systemEntries?.ApplyGlass();
+       var wallpaper = cards.Count > 0 || systemEntries != null ? WallpaperGlass.ReadSource() : (WallpaperGlass.Source?)null;
+       RefreshCardFiles(organizer, cards, wallpaper);
+       RefreshSystemEntries(wallpaper);
    }
-    internal static void RefreshCardFiles(Organizer organizer, IReadOnlyList<DesktopCardWindow> cards)
+    internal static void RefreshCardFiles(Organizer organizer, IReadOnlyList<DesktopCardWindow> cards, WallpaperGlass.Source? wallpaper = null)
     {
         if (cards.Count == 0) return;
         var views = organizer.QueryCollectionViews(cards.ToDictionary(c => c.CollectionId, c => c.FileQuery, StringComparer.Ordinal));
-        foreach (var card in cards) card.UpdateFiles(queriedFiles: views[card.CollectionId]);
+        wallpaper ??= cards.Any(c => c.Handle != IntPtr.Zero) ? WallpaperGlass.ReadSource() : null;
+        foreach (var card in cards) card.UpdateFiles(queriedFiles: views[card.CollectionId], wallpaper: wallpaper);
     }
     private CardPlacement Adjust(string id, CardPlacement requested, string edges)
     {
@@ -152,6 +153,6 @@ internal sealed class DesktopSurface : IDisposable
         if (paused) { CloseCards(); DesktopRecovery.Restore(leasePath); }
         else await RebuildAsync();
     }
-    private void CloseCards() { guides.Dispose(); systemEntries?.Close(); systemEntries = null; systemSignature = ""; foreach (var card in cards.ToList()) { try { card.Close(); } catch (InvalidOperationException) { } } cards.Clear(); }
+    private void CloseCards() { guides.Dispose(); systemEntries?.Close(); systemEntries = null; systemSignature = ""; foreach (var card in cards.ToList()) { try { card.Close(); } catch (InvalidOperationException) { } } cards.Clear(); WallpaperGlass.Clear(); }
     public void Dispose() { if (disposed) return; disposed = true; health.Stop(); CloseCards(); DesktopRecovery.Restore(leasePath); guard?.Dispose(); }
 }

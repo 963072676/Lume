@@ -66,7 +66,7 @@ internal sealed class SystemDesktopWindow : Window
     }
     public SystemDesktopWindow(Organizer organizer, IntPtr desktop, Action settings, IReadOnlyList<Entry>? entries = null,
         Func<string, CardPlacement, string, CardPlacement>? adjust = null, Action? finishAdjustment = null,
-        Func<Entry, Task<ShellIcons.SystemIconResult>>? readIconAsync = null)
+        Func<Entry, Task<ShellIcons.SystemIconResult>>? readIconAsync = null, WallpaperGlass.Source? initialWallpaper = null)
     {
         this.organizer = organizer; this.desktop = desktop; this.settings = settings;
         this.readIconAsync = readIconAsync ?? ShellIcons.GetSystemAsync;
@@ -198,7 +198,7 @@ internal sealed class SystemDesktopWindow : Window
             glassLayers.Children.Add(grip);
         }
         SourceInitialized += (_, _) => { handle = new WindowInteropHelper(this).Handle; DesktopNative.Attach(handle, desktop); };
-        Loaded += (_, _) => { ShellIconChanges.Changed += OnShellChange; UpdateView(); ApplyGlass(); RefreshIcons(true); };
+        Loaded += (_, _) => { ShellIconChanges.Changed += OnShellChange; var wallpaper = initialWallpaper; initialWallpaper = null; UpdateView(wallpaper); RefreshIcons(true); };
         Closed += (_, _) => { ShellIconChanges.Changed -= OnShellChange; iconDebounce.Stop(); iconVersions.Clear(); this.finishAdjustment(); };
     }
     private static void Open(Entry entry)
@@ -211,25 +211,25 @@ internal sealed class SystemDesktopWindow : Window
         organizer.SetOptions(PositionId, organizer.Options(PositionId) with { Collapsed = !organizer.Options(PositionId).Collapsed });
         UpdateView();
     }
-    internal void UpdateView()
+    internal void UpdateView(WallpaperGlass.Source? wallpaper = null)
     {
         var options = organizer.Options(PositionId);
         scroll.Visibility = options.Collapsed ? Visibility.Collapsed : Visibility.Visible;
         collapseButton.Content = options.Collapsed ? "▼" : "▲";
         lockButton.Content = options.Locked ? "" : "";
         lockButton.ToolTip = options.Locked ? "解锁分区" : "锁定分区";
-        Position();
+        Position(wallpaper);
     }
     private void SavePosition()
     {
         try { organizer.SavePlacement(PositionId, placement); }
         catch (Exception ex) { MessageBox.Show(ex.Message, "布局保存失败"); }
     }
-    internal void RefreshPlacement()
+    internal void RefreshPlacement(WallpaperGlass.Source? wallpaper = null)
     {
-        if (dragging) return;
+        if (dragging) { ApplyGlass(wallpaper); return; }
         if (organizer.State.Desktop.Positions.TryGetValue(PositionId, out var saved)) placement = saved;
-        UpdateView();
+        UpdateView(wallpaper);
     }
     private void OnShellChange(ShellIconChange change)
     {
@@ -272,24 +272,25 @@ internal sealed class SystemDesktopWindow : Window
             System.Windows.Automation.AutomationProperties.SetName(target.Button, description);
         }
     }
-    private void Position()
+    private void Position(WallpaperGlass.Source? wallpaper = null)
     {
         if (handle == IntPtr.Zero) return;
         var area = Forms.Screen.AllScreens.FirstOrDefault(s => s.WorkingArea.Contains(placement.X + 20, placement.Y + 20))?.WorkingArea ?? Forms.Screen.PrimaryScreen!.WorkingArea;
         placement = LayoutEngine.Constrain(placement, new(area.X, area.Y, area.Width, area.Height));
         var p = new DesktopNative.Point { X = placement.X, Y = placement.Y }; DesktopNative.ScreenToClient(desktop, ref p);
         DesktopNative.SetWindowPos(handle, IntPtr.Zero, p.X, p.Y, placement.Width, Placement.Height, 0x10 | 0x20 | 0x40);
-        ApplyGlass();
+        ApplyGlass(wallpaper);
     }
-    public void ApplyGlass()
+    public void ApplyGlass(WallpaperGlass.Source? wallpaper = null)
     {
         if (handle == IntPtr.Zero) return;
-        var key = placement + ":" + organizer.State.Desktop.GlassOpacity + ":" + Tokens.Theme.Id + ":" + WallpaperGlass.SourceKey();
+        var source = wallpaper ?? WallpaperGlass.ReadSource();
+        var key = placement + ":" + organizer.State.Desktop.GlassOpacity + ":" + Tokens.Theme.Id + ":" + source.Key;
         if (key == glassSignature) return;
         glassSignature = key;
         var configured = (byte)Math.Clamp(organizer.State.Desktop.GlassOpacity, (byte)15, (byte)240);
         NativeGlassApplied = DesktopNative.Acrylic(handle, configured);
-        try { backdrop.Background = WallpaperGlass.At(placement); } catch (Exception ex) when (ex is System.IO.IOException or NotSupportedException or System.Runtime.InteropServices.COMException) { backdrop.Background = null; }
+        try { backdrop.Background = WallpaperGlass.At(placement, source); } catch (Exception ex) when (ex is System.IO.IOException or NotSupportedException or System.Runtime.InteropServices.COMException) { backdrop.Background = null; }
         GlassApplied = NativeGlassApplied || backdrop.Background != null;
         tint.Background = Tokens.Alpha(Tokens.Glass, configured);
     }

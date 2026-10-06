@@ -47,7 +47,7 @@ internal sealed class DesktopCardWindow : Window
     public DesktopCardWindow(Organizer organizer, Collection collection, CardPlacement placement, IntPtr desktop,
         Func<DesktopFile, TileSelection, UIElement> tileFactory, Action refresh, Action settings, Action<string> archive,
         Func<string, CardPlacement, string, CardPlacement>? adjust = null, Action? finishAdjustment = null,
-        IReadOnlyList<DesktopFile>? initialFiles = null)
+        IReadOnlyList<DesktopFile>? initialFiles = null, WallpaperGlass.Source? initialWallpaper = null)
     {
         this.organizer = organizer; this.tileFactory = tileFactory; this.refresh = refresh; this.placement = placement; this.desktop = desktop; CollectionId = collection.Id;
         System.Windows.Automation.AutomationProperties.SetName(search, "搜索此分区的文件");
@@ -162,7 +162,7 @@ internal sealed class DesktopCardWindow : Window
             DesktopNative.Attach(Handle, desktop);
             HwndSource.FromHwnd(Handle).AddHook(Hook);
         };
-        Loaded += (_, _) => { Position(); ApplyGlass(); var firstFiles = initialFiles; initialFiles = null; UpdateFiles(true, firstFiles); }; Closed += (_, _) => this.finishAdjustment();
+        Loaded += (_, _) => { var firstFiles = initialFiles; initialFiles = null; var wallpaper = initialWallpaper; initialWallpaper = null; UpdateFiles(true, firstFiles, wallpaper); }; Closed += (_, _) => this.finishAdjustment();
     }
     private void ToggleCollapsed() { organizer.SetOptions(CollectionId, organizer.Options(CollectionId) with { Collapsed = !organizer.Options(CollectionId).Collapsed }); UpdateFiles(true); }
     private void ToggleSearch()
@@ -179,29 +179,30 @@ internal sealed class DesktopCardWindow : Window
         if (message == 0x0112 && ((long)wp & 0xFFF0) == 0xF020) { handled = true; return IntPtr.Zero; }
         return IntPtr.Zero;
     }
-    public void Position()
+    public void Position(WallpaperGlass.Source? wallpaper = null)
     {
         if (Handle == IntPtr.Zero) return;
         var area = Forms.Screen.AllScreens.FirstOrDefault(s => s.WorkingArea.Contains(placement.X + 20, placement.Y + 20))?.WorkingArea ?? Forms.Screen.PrimaryScreen!.WorkingArea;
         placement = LayoutEngine.Constrain(placement, new(area.X, area.Y, area.Width, area.Height));
         var point = new DesktopNative.Point { X = placement.X, Y = placement.Y }; DesktopNative.ScreenToClient(desktop, ref point);
         DesktopNative.SetWindowPos(Handle, IntPtr.Zero, point.X, point.Y, placement.Width, Placement.Height, 0x10 | 0x20 | 0x40);
-        ApplyGlass();
+        ApplyGlass(wallpaper);
     }
     private void SavePosition() { try { organizer.SavePlacement(CollectionId, placement); } catch (Exception ex) { MessageBox.Show(ex.Message, "布局保存失败"); } }
-    public void ApplyGlass()
+    public void ApplyGlass(WallpaperGlass.Source? wallpaper = null)
     {
         if (Handle == IntPtr.Zero) return;
-        var key = placement + ":" + organizer.State.Desktop.GlassOpacity + ":" + Tokens.Theme.Id + ":" + WallpaperGlass.SourceKey();
+        var source = wallpaper ?? WallpaperGlass.ReadSource();
+        var key = placement + ":" + organizer.State.Desktop.GlassOpacity + ":" + Tokens.Theme.Id + ":" + source.Key;
         if (key == glassSignature) return;
         glassSignature = key;
         var configured = (byte)Math.Clamp(organizer.State.Desktop.GlassOpacity, (byte)15, (byte)240);
         NativeGlassApplied = DesktopNative.Acrylic(Handle, configured);
-        try { backdrop.Background = WallpaperGlass.At(placement); } catch (Exception ex) when (ex is System.IO.IOException or NotSupportedException or System.Runtime.InteropServices.COMException) { backdrop.Background = null; }
+        try { backdrop.Background = WallpaperGlass.At(placement, source); } catch (Exception ex) when (ex is System.IO.IOException or NotSupportedException or System.Runtime.InteropServices.COMException) { backdrop.Background = null; }
         GlassApplied = NativeGlassApplied || backdrop.Background != null;
         tint.Background = Tokens.Alpha(Tokens.Glass, configured);
     }
-    public void UpdateFiles(bool force = false, IReadOnlyList<DesktopFile>? queriedFiles = null)
+    public void UpdateFiles(bool force = false, IReadOnlyList<DesktopFile>? queriedFiles = null, WallpaperGlass.Source? wallpaper = null)
     {
         var collection = organizer.State.Configuration.Collections.First(c => c.Id == CollectionId);
         var options = organizer.Options(CollectionId);
@@ -215,7 +216,7 @@ internal sealed class DesktopCardWindow : Window
         lockButton.Content = options.Locked ? "\uE72E" : "\uE785";
         lockButton.ToolTip = options.Locked ? "解除锁定位置与大小" : "锁定位置与大小";
         System.Windows.Automation.AutomationProperties.SetName(lockButton, options.Locked ? "解除锁定分区" : "锁定分区");
-        Position();
+        Position(wallpaper);
         title.Text = collection.Name; title.TextWrapping = TextWrapping.NoWrap; title.TextTrimming = TextTrimming.CharacterEllipsis; title.ToolTip = collection.MappedPath ?? collection.Name;
         var all = queriedFiles ?? organizer.CollectionFiles(CollectionId, search.Text);
         if (countBadge.Child is TextBlock count) count.Text = all.Count.ToString();
