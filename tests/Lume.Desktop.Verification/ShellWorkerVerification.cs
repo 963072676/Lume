@@ -21,7 +21,10 @@ internal static class ShellWorkerVerification
         _ = client.SendAsync(new("hang", Path: ready), limit: TimeSpan.FromSeconds(10));
         var clock = Stopwatch.StartNew();
         while (!File.Exists(ready)) { if (clock.Elapsed > TimeSpan.FromSeconds(2)) return 1; Thread.Sleep(10); }
-        File.WriteAllText(args[1], JsonSerializer.Serialize(new { ownerPid = Environment.ProcessId, workerPid = reply.Pid }));
+        var report = args[1] + ".tmp";
+        File.WriteAllText(report, JsonSerializer.Serialize(new { ownerPid = Environment.ProcessId, workerPid = reply.Pid }));
+        // File.Exists must indicate a complete, closed report before the parent reads it.
+        File.Move(report, args[1]);
         Thread.Sleep(Timeout.Infinite); return 0;
     }
     internal static int Run()
