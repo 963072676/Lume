@@ -15,7 +15,7 @@ try {
         $name = "Lume-$version-win-x64$suffix"; $directory = Join-Path $root "artifacts/$name"
         $package = & (Join-Path $PSScriptRoot 'read-release-package.ps1') -ZipPath ($directory + '.zip') -Version $version -Source $Source -SelfContained ($suffix -eq '') -Directory $directory
         $packages += $package
-        foreach ($flag in @('--wallpaper-self-test','--card-query-self-test','--accessibility-self-test','--palette-self-test','--retention-self-test','--shell-worker-self-test','--performance-self-test','--smoke')) {
+        foreach ($flag in @('--image-preview-self-test','--wallpaper-self-test','--card-query-self-test','--accessibility-self-test','--palette-self-test','--retention-self-test','--shell-worker-self-test','--performance-self-test','--smoke')) {
             $process = Start-Process -FilePath (Join-Path $directory 'Lume.exe') -ArgumentList $flag -WindowStyle Hidden -PassThru
             if (!$process.WaitForExit(30000)) { $process.Kill(); throw ('正式包验收入口未退出：' + $flag) }
             if ($process.ExitCode -ne 2) { throw ('正式包接受了验收入口：' + $flag) }

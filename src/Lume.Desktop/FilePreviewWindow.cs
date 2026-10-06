@@ -81,7 +81,7 @@ internal sealed class FilePreviewWindow : Window
             var kind = FilePreview.Kind(file.Path);
             if (kind == "image")
             {
-                var image = await Task.Run(() => { using var stream = File.OpenRead(file.Path); var bitmap = new BitmapImage(); bitmap.BeginInit(); bitmap.CacheOption = BitmapCacheOption.OnLoad; bitmap.DecodePixelWidth = 1600; bitmap.StreamSource = stream; bitmap.EndInit(); bitmap.Freeze(); return bitmap; });
+                var image = await Task.Run(() => ImagePreview.Load(file.Path, cancellation.Token), cancellation.Token);
                 cancellation.Token.ThrowIfCancellationRequested();
                 var display = new Image { Source = image, Stretch = Stretch.Uniform, Width = Math.Min(680, 370.0 * image.PixelWidth / image.PixelHeight) };
                 var panel = new DockPanel(); var controls = Ui.Row(Ui.Button("适应", () => display.LayoutTransform = null), Ui.Button("100%", () => display.LayoutTransform = new ScaleTransform(1, 1))); DockPanel.SetDock(controls, Dock.Bottom); panel.Children.Add(controls);
