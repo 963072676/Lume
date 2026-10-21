@@ -4,11 +4,9 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
 using Lume.Core;
 using Windows.Data.Pdf;
 using Windows.Storage;
-using Windows.Storage.Streams;
 
 namespace Lume.Desktop;
 
@@ -90,7 +88,7 @@ internal sealed class FilePreviewWindow : Window
             }
             else if (kind == "pdf")
             {
-                pdf = await PdfDocument.LoadFromFileAsync(await StorageFile.GetFileFromPathAsync(file.Path)); cancellation.Token.ThrowIfCancellationRequested();
+                var document = await PdfDocument.LoadFromFileAsync(await StorageFile.GetFileFromPathAsync(file.Path)); cancellation.Token.ThrowIfCancellationRequested(); pdf = document;
                 await RenderPage(); return;
             }
             else if (kind == "media")
@@ -112,12 +110,9 @@ internal sealed class FilePreviewWindow : Window
         if (rendering || pdf == null || cancellation.IsCancellationRequested) return; rendering = true;
         try
         {
-            using var pdfPage = pdf.GetPage(page); using var stream = new InMemoryRandomAccessStream();
-            await pdfPage.RenderToStreamAsync(stream, new PdfPageRenderOptions { DestinationWidth = 1200 }); cancellation.Token.ThrowIfCancellationRequested();
-            if (stream.Size > 32 * 1024 * 1024) throw new IOException("PDF 页面过大。");
-            using var reader = new DataReader(stream.GetInputStreamAt(0)); await reader.LoadAsync((uint)stream.Size); var bytes = new byte[(int)stream.Size]; reader.ReadBytes(bytes);
+            using var pdfPage = pdf.GetPage(page);
+            var bitmap = await PdfPreview.RenderAsync(pdfPage, cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();
-            var bitmap = new BitmapImage(); bitmap.BeginInit(); bitmap.CacheOption = BitmapCacheOption.OnLoad; bitmap.StreamSource = new MemoryStream(bytes); bitmap.EndInit(); bitmap.Freeze();
             var panel = new DockPanel();
             var before = Ui.Button("上一页", async () => { if (page > 0 && !rendering) { page--; await RenderPage(); } });
             var after = Ui.Button("下一页", async () => { if (pdf != null && page + 1 < pdf.PageCount && !rendering) { page++; await RenderPage(); } });
